@@ -34,53 +34,37 @@ st.info("How to use: Person 1 uses the left side. Person 2 uses the right side."
 col1, col2 = st.columns(2)
 
 # --- PERSON 1: TAMIL SPEAKER ---
-with col1:
-    st.subheader("👤 Person 1 (Tamil)")
-    st.write("Speaking Tamil? Click below:")
-    audio_ta = mic_recorder(start_prompt="🎤 Speak Tamil", stop_prompt="⏹️ Finish", key="p1_mic")
-    
-    if audio_ta:
-        with open("p1_input.wav", "wb") as f:
-            f.write(audio_ta['bytes'])
-        
-        with st.spinner("Translating to English for Person 2..."):
-            # Whisper listens (it auto-detects Tamil if spoken clearly)
+with st.spinner("Translating to English for Person 2..."):
             result = model.transcribe("p1_input.wav")
-            ta_text = result['text']
-            st.markdown(f"**Heard (Tamil):** {ta_text}")
+            ta_text = result['text'].strip() # .strip() removes empty spaces
             
-            # Translate Tamil to English
-            en_translation = GoogleTranslator(source='ta', target='en').translate(ta_text)
-            st.success(f"**Translated (English):** {en_translation}")
-            
-            # Convert English translation to Audio
-            tts_en = gTTS(text=en_translation, lang='en')
-            tts_en.save("p1_out.mp3")
-            play_audio("p1_out.mp3")
-
-st.divider()
+            if ta_text: # <--- SAFETY GUARD: Only proceed if text exists
+                st.markdown(f"**Heard (Tamil):** {ta_text}")
+                en_translation = GoogleTranslator(source='ta', target='en').translate(ta_text)
+                
+                if en_translation: # <--- SECOND GUARD
+                    st.success(f"**Translated (English):** {en_translation}")
+                    tts_en = gTTS(text=en_translation, lang='en')
+                    tts_en.save("p1_out.mp3")
+                    play_audio("p1_out.mp3")
+            else:
+                st.warning("I didn't hear anything. Please try speaking again!")
 
 # --- PERSON 2: ENGLISH SPEAKER ---
-with col2:
-    st.subheader("👤 Person 2 (English)")
-    st.write("Speaking English? Click below:")
-    audio_en = mic_recorder(start_prompt="🎤 Speak English", stop_prompt="⏹️ Finish", key="p2_mic")
-    
-    if audio_en:
-        with open("p2_input.wav", "wb") as f:
-            f.write(audio_en['bytes'])
-            
-        with st.spinner("Translating to Tamil for Person 1..."):
+with st.spinner("Translating to Tamil for Person 1..."):
             result = model.transcribe("p2_input.wav")
-            en_text = result['text']
-            st.markdown(f"**Heard (English):** {en_text}")
+            en_text = result['text'].strip()
             
-            # Translate English to Tamil
-            ta_translation = GoogleTranslator(source='en', target='ta').translate(en_text)
-            st.success(f"**Translated (Tamil):** {ta_translation}")
-            
-            # Convert Tamil translation to Audio
-            tts_ta = gTTS(text=ta_translation, lang='ta')
-            tts_ta.save("p2_out.mp3")
-            play_audio("p2_out.mp3")
+            if en_text: # <--- SAFETY GUARD
+                st.markdown(f"**Heard (English):** {en_text}")
+                ta_translation = GoogleTranslator(source='en', target='ta').translate(en_text)
+                
+                if ta_translation: # <--- SECOND GUARD
+                    st.success(f"**Translated (Tamil):** {ta_translation}")
+                    tts_ta = gTTS(text=ta_translation, lang='ta')
+                    tts_ta.save("p2_out.mp3")
+                    play_audio("p2_out.mp3")
+            else:
+                st.warning("I didn't hear anything. Please try speaking again!")
            
+
