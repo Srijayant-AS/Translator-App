@@ -9,37 +9,39 @@ import tempfile
 import time
 
 # --- 1. APP CONFIGURATION ---
-st.set_page_config(page_title="2-Second Fast Reset Bridge", layout="wide")
+st.set_page_config(page_title="Stable Voice Bridge", layout="wide")
 
+# Load Whisper model (Small for better accuracy)
 @st.cache_resource
 def load_whisper_model():
     return whisper.load_model("small")
 
 model = load_whisper_model()
 
+# Use Session State to manage turns and prevent infinite loops
+if 'process_complete' not in st.session_state:
+    st.session_state.process_complete = False
+
 def play_audio(file_path):
-    """Encodes and plays audio immediately."""
+    """Encodes and plays audio."""
     with open(file_path, "rb") as f:
         data = f.read()
         b64 = base64.b64encode(data).decode()
-        
-    audio_html = f"""
-        <audio autoplay="true">
-        <source src="data:audio/mp3;base64,{b64}" type="audio/mp3">
-        </audio>
-    """
+    audio_html = f'<audio autoplay="true"><source src="data:audio/mp3;base64,{b64}" type="audio/mp3"></audio>'
     st.markdown(audio_html, unsafe_allow_html=True)
 
 # --- 2. USER INTERFACE ---
 st.title("📞 Tamil ↔ English Voice Bridge")
-st.write("History will self-destruct in 2 seconds after translation.")
+st.write("Each side resets automatically after 2 seconds.")
 
 col1, col2 = st.columns(2)
 
 # --- 3. PERSON 1: TAMIL SPEAKER ---
 with col1:
     st.subheader("👤 Person 1 (Tamil)")
-    audio_ta = mic_recorder(start_prompt="🎤 Speak Tamil", stop_prompt="⏹️ Stop", key="ta_mic_2s")
+    # We change the key every time to force a fresh microphone
+    ta_key = "ta_mic_" + str(st.session_state.get('ta_version', 0))
+    audio_ta = mic_recorder(start_prompt="🎤 Speak Tamil", stop_prompt="⏹️ Stop", key=ta_key)
     
     if audio_ta:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_file:
@@ -47,32 +49,32 @@ with col1:
             tmp_path = tmp_file.name
         
         try:
-            with st.spinner("Processing..."):
-                # Initial prompt helps with colloquial Tamil recognition
+            with st.spinner("Processing Tamil..."):
                 result = model.transcribe(tmp_path, language="ta", initial_prompt="வணக்கம், எப்படி இருக்கீங்க?")
                 ta_text = result['text'].strip()
                 
                 if ta_text:
                     st.write(f"**Heard:** {ta_text}")
-                    en_translation = GoogleTranslator(source='ta', target='en').translate(ta_text)
-                    st.success(f"**English:** {en_translation}")
+                    en_trans = GoogleTranslator(source='ta', target='en').translate(ta_text)
+                    st.success(f"**English:** {en_trans}")
                     
-                    # Generate audio
                     fname = f"ta_en_{int(time.time())}.mp3"
-                    gTTS(text=en_translation, lang='en').save(fname)
+                    gTTS(text=en_trans, lang='en').save(fname)
                     play_audio(fname)
                     
-                    # --- 2 SECOND RESET ---
-                    time.sleep(2) 
+                    time.sleep(2)
                     os.remove(fname)
-                    st.rerun() # Wipes the screen
+                    # Update version to reset mic and rerun
+                    st.session_state.ta_version = st.session_state.get('ta_version', 0) + 1
+                    st.rerun()
         finally:
             if os.path.exists(tmp_path): os.remove(tmp_path)
 
 # --- 4. PERSON 2: ENGLISH SPEAKER ---
 with col2:
     st.subheader("👤 Person 2 (English)")
-    audio_en = mic_recorder(start_prompt="🎤 Speak English", stop_prompt="⏹️ Stop", key="en_mic_2s")
+    en_key = "en_mic_" + str(st.session_state.get('en_version', 0))
+    audio_en = mic_recorder(start_prompt="🎤 Speak English", stop_prompt="⏹️ Stop", key=en_key)
     
     if audio_en:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_file:
@@ -80,26 +82,27 @@ with col2:
             tmp_path = tmp_file.name
             
         try:
-            with st.spinner("Processing..."):
+            with st.spinner("Processing English..."):
                 result = model.transcribe(tmp_path, language="en")
                 en_text = result['text'].strip()
                 
                 if en_text:
                     st.write(f"**Heard:** {en_text}")
-                    ta_translation = GoogleTranslator(source='en', target='ta').translate(en_text)
-                    st.success(f"**Tamil:** {ta_translation}")
+                    ta_trans = GoogleTranslator(source='en', target='ta').translate(en_text)
+                    st.success(f"**Tamil:** {ta_trans}")
                     
-                    # Generate audio
                     fname = f"en_ta_{int(time.time())}.mp3"
-                    gTTS(text=ta_translation, lang='ta').save(fname)
+                    gTTS(text=ta_trans, lang='ta').save(fname)
                     play_audio(fname)
                     
-                    # --- 2 SECOND RESET ---
-                    time.sleep(2) 
+                    time.sleep(2)
                     os.remove(fname)
-                    st.rerun() # Wipes the screen
+                    # Update version to reset mic and rerun
+                    st.session_state.en_version = st.session_state.get('en_version', 0) + 1
+                    st.rerun()
         finally:
             if os.path.exists(tmp_path): os.remove(tmp_path)
+
 
 
 
