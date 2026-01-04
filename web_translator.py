@@ -97,12 +97,13 @@ with col2:
                     
                     # --- THE AUTO-DELETE LOGIC ---
                     # Wait for 5 seconds
-                    time.sleep(3) 
+                    time.sleep(5) 
                     os.remove(fname)
                     # Refresh the page to clear the text
                     st.rerun()
         finally:
             if os.path.exists(tmp_path): os.remove(tmp_path)
+
 
 
 
