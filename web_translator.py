@@ -9,7 +9,7 @@ import tempfile
 import time
 
 # --- 1. APP CONFIGURATION ---
-st.set_page_config(page_title="Tamil-English Bridge", layout="wide")
+st.set_page_config(page_title="Self-Erasing Tamil-English Bridge", layout="wide")
 
 @st.cache_resource
 def load_whisper_model():
@@ -18,13 +18,13 @@ def load_whisper_model():
 model = load_whisper_model()
 
 def play_audio(file_path):
-    """Plays audio and deletes the file afterward."""
+    """Encodes and plays audio."""
     with open(file_path, "rb") as f:
         data = f.read()
         b64 = base64.b64encode(data).decode()
         
     audio_html = f"""
-        <audio autoplay="true" key="{time.time()}">
+        <audio autoplay="true">
         <source src="data:audio/mp3;base64,{b64}" type="audio/mp3">
         </audio>
     """
@@ -32,38 +32,22 @@ def play_audio(file_path):
 
 # --- 2. USER INTERFACE ---
 st.title("📞 Tamil ↔ English Voice Bridge")
-st.write("The history clears automatically as soon as the other person speaks.")
+st.write("The translation will disappear automatically after the audio plays.")
 
 col1, col2 = st.columns(2)
 
-# --- 3. CONTAINERS FOR AUTO-ERASING ---
-# We create these so we can clear them individually
+# --- 3. PERSON 1: TAMIL SPEAKER ---
 with col1:
     st.subheader("👤 Person 1 (Tamil)")
-    ta_mic_area = st.empty() # Placeholder for the mic
-    ta_text_area = st.empty() # Placeholder for the translated text
-
-with col2:
-    st.subheader("👤 Person 2 (English)")
-    en_mic_area = st.empty() # Placeholder for the mic
-    en_text_area = st.empty() # Placeholder for the translated text
-
-# --- 4. LOGIC FOR TAMIL SPEAKER ---
-with ta_mic_area:
-    audio_ta = mic_recorder(start_prompt="🎤 Speak Tamil", stop_prompt="⏹️ Stop", key="ta_mic")
-
-if audio_ta:
-    # STEP 1: IMMEDIATELY ERASE BOTH SIDES' HISTORY
-    ta_text_area.empty()
-    en_text_area.empty()
+    audio_ta = mic_recorder(start_prompt="🎤 Speak Tamil", stop_prompt="⏹️ Stop", key="ta_mic_erase")
     
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_file:
-        tmp_file.write(audio_ta['bytes'])
-        tmp_path = tmp_file.name
-    
-    try:
-        with ta_text_area.container(): # Put new text here
-            with st.spinner("Translating..."):
+    if audio_ta:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_file:
+            tmp_file.write(audio_ta['bytes'])
+            tmp_path = tmp_file.name
+        
+        try:
+            with st.spinner("Processing..."):
                 result = model.transcribe(tmp_path, language="ta", initial_prompt="வணக்கம், எப்படி இருக்கீங்க?")
                 ta_text = result['text'].strip()
                 
@@ -72,31 +56,32 @@ if audio_ta:
                     en_translation = GoogleTranslator(source='ta', target='en').translate(ta_text)
                     st.success(f"**English:** {en_translation}")
                     
-                    # Generate and play audio
-                    fname = f"out_{int(time.time())}.mp3"
+                    # Audio generation
+                    fname = f"ta_en_{int(time.time())}.mp3"
                     gTTS(text=en_translation, lang='en').save(fname)
                     play_audio(fname)
-                    time.sleep(1)
+                    
+                    # --- THE AUTO-DELETE LOGIC ---
+                    # Wait for 5 seconds so they can read/hear it
+                    time.sleep(5) 
                     os.remove(fname)
-    finally:
-        if os.path.exists(tmp_path): os.remove(tmp_path)
+                    # Refresh the page to clear the text
+                    st.rerun() 
+        finally:
+            if os.path.exists(tmp_path): os.remove(tmp_path)
 
-# --- 5. LOGIC FOR ENGLISH SPEAKER ---
-with en_mic_area:
-    audio_en = mic_recorder(start_prompt="🎤 Speak English", stop_prompt="⏹️ Stop", key="en_mic")
-
-if audio_en:
-    # STEP 1: IMMEDIATELY ERASE BOTH SIDES' HISTORY
-    ta_text_area.empty()
-    en_text_area.empty()
+# --- 4. PERSON 2: ENGLISH SPEAKER ---
+with col2:
+    st.subheader("👤 Person 2 (English)")
+    audio_en = mic_recorder(start_prompt="🎤 Speak English", stop_prompt="⏹️ Stop", key="en_mic_erase")
     
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_file:
-        tmp_file.write(audio_en['bytes'])
-        tmp_path = tmp_file.name
-        
-    try:
-        with en_text_area.container(): # Put new text here
-            with st.spinner("Translating..."):
+    if audio_en:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_file:
+            tmp_file.write(audio_en['bytes'])
+            tmp_path = tmp_file.name
+            
+        try:
+            with st.spinner("Processing..."):
                 result = model.transcribe(tmp_path, language="en")
                 en_text = result['text'].strip()
                 
@@ -105,14 +90,20 @@ if audio_en:
                     ta_translation = GoogleTranslator(source='en', target='ta').translate(en_text)
                     st.success(f"**Tamil:** {ta_translation}")
                     
-                    # Generate and play audio
-                    fname = f"out_{int(time.time())}.mp3"
+                    # Audio generation
+                    fname = f"en_ta_{int(time.time())}.mp3"
                     gTTS(text=ta_translation, lang='ta').save(fname)
                     play_audio(fname)
-                    time.sleep(1)
+                    
+                    # --- THE AUTO-DELETE LOGIC ---
+                    # Wait for 5 seconds
+                    time.sleep(3) 
                     os.remove(fname)
-    finally:
-        if os.path.exists(tmp_path): os.remove(tmp_path)
+                    # Refresh the page to clear the text
+                    st.rerun()
+        finally:
+            if os.path.exists(tmp_path): os.remove(tmp_path)
+
 
 
 
