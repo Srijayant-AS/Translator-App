@@ -6,32 +6,34 @@ from gtts import gTTS
 import os
 import base64
 import tempfile
+import time  # New: Required for unique audio files
 
 # --- 1. APP CONFIGURATION ---
 st.set_page_config(page_title="High-Accuracy Translator", layout="wide")
 
 @st.cache_resource
 def load_whisper_model():
-    # 'small' is significantly more accurate for Tamil than 'base'
-    # It takes a bit longer to load the first time, but the results are better.
+    # 'small' provides better accuracy for Indian accents
     return whisper.load_model("small")
 
 model = load_whisper_model()
 
 def play_audio(file_path):
+    """Encodes audio and forces the browser to play it using a unique key."""
     with open(file_path, "rb") as f:
         data = f.read()
         b64 = base64.b64encode(data).decode()
+        # The key="{time.time()}" forces the HTML to refresh so audio plays every time
         md = f"""
-            <audio autoplay="true">
+            <audio autoplay="true" key="{time.time()}">
             <source src="data:audio/mp3;base64,{b64}" type="audio/mp3">
             </audio>
             """
         st.markdown(md, unsafe_allow_html=True)
 
 # --- 2. USER INTERFACE ---
-st.title("📞 Tamil ↔ English Voice Bridge (Pro)")
-st.write("Using Whisper-Small for higher accuracy in Tamil recognition.")
+st.title("📞 Tamil ↔ English Voice Bridge (v2.0)")
+st.write("Fixed: Audio will now play for every turn in the conversation.")
 
 col1, col2 = st.columns(2)
 
@@ -47,22 +49,27 @@ with col1:
         
         try:
             with st.spinner("AI is analyzing Tamil speech..."):
-                # ACCURACY FIX: We force the language to 'ta' (Tamil)
-                # This prevents the AI from getting confused by background noise
                 result = model.transcribe(tmp_path, language="ta")
                 ta_text = result['text'].strip()
                 
                 if ta_text:
                     st.markdown(f"**Heard (Tamil):** {ta_text}")
-                    
-                    # Translation logic
                     en_translation = GoogleTranslator(source='ta', target='en').translate(ta_text)
                     
                     if en_translation:
                         st.success(f"**To English:** {en_translation}")
+                        
+                        # UNIQUE FILENAME FIX
+                        ts = int(time.time())
+                        audio_filename = f"ta_to_en_{ts}.mp3"
+                        
                         tts = gTTS(text=en_translation, lang='en')
-                        tts.save("p1_out.mp3")
-                        play_audio("p1_out.mp3")
+                        tts.save(audio_filename)
+                        play_audio(audio_filename)
+                        
+                        # Small delay to ensure playback starts before file cleanup
+                        time.sleep(1) 
+                        os.remove(audio_filename)
                 else:
                     st.warning("Could not clearly hear Tamil. Please try again.")
         finally:
@@ -81,27 +88,32 @@ with col2:
             
         try:
             with st.spinner("AI is analyzing English speech..."):
-                # ACCURACY FIX: Force language to 'en'
                 result = model.transcribe(tmp_path, language="en")
                 en_text = result['text'].strip()
                 
                 if en_text:
                     st.markdown(f"**Heard (English):** {en_text}")
-                    
-                    # Translate to Tamil
                     ta_translation = GoogleTranslator(source='en', target='ta').translate(en_text)
                     
                     if ta_translation:
                         st.success(f"**To Tamil:** {ta_translation}")
+                        
+                        # UNIQUE FILENAME FIX
+                        ts = int(time.time())
+                        audio_filename = f"en_to_ta_{ts}.mp3"
+                        
                         tts = gTTS(text=ta_translation, lang='ta')
-                        tts.save("p2_out.mp3")
-                        play_audio("p2_out.mp3")
+                        tts.save(audio_filename)
+                        play_audio(audio_filename)
+                        
+                        time.sleep(1)
+                        os.remove(audio_filename)
                 else:
                     st.warning("Could not clearly hear English. Please try again.")
         finally:
             if os.path.exists(tmp_path):
                 os.remove(tmp_path)
-           
+
 
 
 
