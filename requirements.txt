@@ -1,6 +1,7 @@
 streamlit
 streamlit-mic-recorder
 openai-whisper
-googletrans==4.0.0-rc1
+deep-translator
 gTTS
 legacy-cgi
+
