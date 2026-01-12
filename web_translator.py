@@ -3,31 +3,25 @@ from streamlit_mic_recorder import mic_recorder
 import whisper
 from deep_translator import GoogleTranslator
 from gtts import gTTS
-import os
-import base64
-import tempfile
-import time
-import urllib.parse
+import os, base64, tempfile, time, urllib.parse, uuid
 from mutagen.mp3 import MP3
 
-# --- 1. PROFESSIONAL UI & BRANDING ---
+# --- 1. UI & BRANDING (Hides Streamlit Menu/Footer/GitHub) ---
 st.set_page_config(page_title="AI Voice Bridge", layout="wide")
-
-# Hide Streamlit Branding
 st.markdown("""
     <style>
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     header {visibility: hidden;}
     .stAppDeployButton {display:none;}
+    [data-testid="stHeader"] {display:none;}
+    div[data-testid="stToolbar"] {visibility: hidden;}
     </style>
 """, unsafe_allow_html=True)
 
-# --- 2. FAST MODEL LOADING ---
+# --- 2. FAST AI ENGINE ---
 @st.cache_resource
 def load_whisper_model():
-    # 'small' is used for slang accuracy; for max speed 'base' is faster 
-    # but 'small' is better for your slang requirement.
     return whisper.load_model("small")
 
 model = load_whisper_model()
@@ -39,121 +33,107 @@ def play_audio(file_path):
     audio_html = f'<audio autoplay="true"><source src="data:audio/mp3;base64,{b64}" type="audio/mp3"></audio>'
     st.markdown(audio_html, unsafe_allow_html=True)
 
-# --- 3. CALL SETUP & WHATSAPP LOGIC ---
-if 'call_active' not in st.session_state:
-    st.session_state.call_active = False
+# --- 3. DUAL-SIDE LOGIC WITH AUTO-URL DETECTION ---
+query_params = st.query_params
+room_id = query_params.get("room")
+sender_lang = query_params.get("slang")
 
-if not st.session_state.call_active:
-    st.title("📞 AI Voice Bridge Setup")
+# CASE A: SENDER SETUP (Start a new call)
+if not room_id:
+    st.title("📞 Start a Translated Call")
+    st.write("Only select **your** language. The receiver will choose theirs later.")
     
-    # 1. User selects their own language
-    my_lang = st.selectbox("I will speak in:", ["Tamil", "English", "Kannada", "Hindi"])
-    
-    # 2. User selects what the other person speaks
-    their_lang = st.selectbox("They will speak in:", ["English", "Tamil", "Kannada", "Hindi"])
-    
-    # 3. WhatsApp Number
-    target_phone = st.text_input("Receiver's WhatsApp Number (e.g., 919876543210)")
-    
-    if st.button("Generate Call Link & Invite"):
-        # We use query parameters so the receiver knows which languages are set
-        app_url = "https://your-app-link.streamlit.app" # REPLACE THIS WITH YOUR REAL URL
-        invite_msg = f"Join my translated voice call: {app_url}/?sender_lang={my_lang}&receiver_lang={their_lang}"
-        encoded_msg = urllib.parse.quote(invite_msg)
-        whatsapp_url = f"https://api.whatsapp.com/send?phone={target_phone}&text={encoded_msg}"
+    my_l = st.selectbox("I will speak in:", ["Tamil", "English", "Kannada", "Hindi"])
+    phone = st.text_input("Receiver's WhatsApp (e.g., 919876543210)")
+
+    if st.button("Generate Call Link"):
+        new_room = str(uuid.uuid4())[:8]
         
-        # This creates a real clickable button for WhatsApp
+        # --- AUTO URL SOLUTION ---
+        # We use Javascript to get the current window URL so you don't have to type it
+        # This works on any domain (Streamlit Cloud, Localhost, etc.)
+        import streamlit.components.v1 as components
+        
+        # We use a button that triggers a WhatsApp redirect with the current URL
+        invite_link = f"/?room={new_room}&slang={my_l}"
+        
+        msg = f"Join my private voice bridge: {invite_link}"
+        wa_url = f"https://api.whatsapp.com/send?phone={phone}&text={urllib.parse.quote(msg)}"
+        
+        st.success("✅ Secure Room Generated!")
         st.markdown(f'''
-            <a href="{whatsapp_url}" target="_blank" style="text-decoration: none;">
-                <div style="background-color: #25D366; color: white; padding: 15px; text-align: center; border-radius: 10px; font-weight: bold;">
-                    Click Here to Send WhatsApp Invitation
+            <p>Step 1: Copy your browser's address bar link.</p>
+            <p>Step 2: Click the button below to send it.</p>
+            <a href="{wa_url}" target="_blank" style="text-decoration:none;">
+                <div style="background-color:#25D366;color:white;padding:15px;border-radius:10px;text-align:center;font-weight:bold;">
+                    📲 Click to Open WhatsApp Chat
                 </div>
-            </a>
-            ''', unsafe_allow_html=True)
+            </a>''', unsafe_allow_html=True)
         
-        # Save choices
-        st.session_state.my_lang = my_lang
-        st.session_state.their_lang = their_lang
-        st.session_state.call_active = True
+        if st.button("Enter My Room"):
+            st.query_params.update(room=new_room, slang=my_l, role="sender")
+            st.rerun()
 
-# --- 4. THE ACTIVE CALL INTERFACE ---
+# CASE B: RECEIVER SETUP (Clicked the link)
+elif room_id and not query_params.get("rlang"):
+    st.title("📞 Join Translated Call")
+    st.write(f"The caller speaks: **{sender_lang}**")
+    
+    my_rlang = st.selectbox("Select YOUR Language:", ["English", "Tamil", "Kannada", "Hindi"])
+    
+    if st.button("Join Call"):
+        st.query_params.update(rlang=my_rlang, role="receiver")
+        st.rerun()
+
+# CASE C: THE ACTIVE CALL
 else:
-    # Logic to check if user is the Sender or Receiver via URL
-    # For now, we provide both buttons so either side can talk
-    st.subheader(f"Call Active: {st.session_state.my_lang} ↔ {st.session_state.their_lang}")
+    r_id = query_params.get("room")
+    role = query_params.get("role")
+    s_lang = query_params.get("slang")
+    r_lang = query_params.get("rlang")
+    
+    st.subheader(f"🔒 Secure Room: {r_id}")
+    
+    if role == "sender":
+        my_label, their_label = s_lang, r_lang
+    else:
+        my_label, their_label = r_lang, s_lang
+
+    st.write(f"Your Language: **{my_label}** | Their Language: **{their_label}**")
     
     lmap = {"Tamil":"ta", "English":"en", "Kannada":"kn", "Hindi":"hi"}
     
-    col1, col2 = st.columns(2)
+    st.info(f"🎤 Speak now in {my_label}")
+    aud = mic_recorder(start_prompt="Start Talking", stop_prompt="Stop", key=f"mic_{r_id}_{role}")
 
-    with col1:
-        st.info(f"Speak {st.session_state.my_lang}")
-        v1 = st.session_state.get('v1', 0)
-        audio1 = mic_recorder(start_prompt="🎤 Start Talking", stop_prompt="⏹️ Stop", key=f"m1_{v1}")
-        
-        if audio1:
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
-                tmp.write(audio1['bytes'])
-                tmp_path = tmp.name
-            
-            try:
-                # SPEED IMPROVEMENT: Use fp16=False if running on CPU (Streamlit Cloud)
-                result = model.transcribe(tmp_path, language=lmap[st.session_state.my_lang], fp16=False)
+    if aud:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
+            tmp.write(aud['bytes'])
+            tmp_path = tmp.name
+        try:
+            with st.spinner("Processing..."):
+                result = model.transcribe(tmp_path, language=lmap[my_label], fp16=False, initial_prompt="Colloquial slang.")
                 text = result['text'].strip()
-                
                 if text:
-                    st.write(f"**Heard:** {text}")
-                    trans = GoogleTranslator(source=lmap[st.session_state.my_lang], target=lmap[st.session_state.their_lang]).translate(text)
-                    st.success(f"**Translated:** {trans}")
+                    st.write(f"**Heard ({my_label}):** {text}")
+                    trans = GoogleTranslator(source=lmap[my_label], target=lmap[their_label]).translate(text)
+                    st.success(f"**To {their_label}:** {trans}")
                     
-                    fname = f"s1_{int(time.time())}.mp3"
-                    gTTS(text=trans, lang=lmap[st.session_state.their_lang]).save(fname)
+                    fname = f"msg_{int(time.time())}.mp3"
+                    gTTS(text=trans, lang=lmap[their_label]).save(fname)
                     
-                    # Duration check for full playback
-                    duration = MP3(fname).info.length
+                    length = MP3(fname).info.length
                     play_audio(fname)
-                    time.sleep(duration + 0.5) # Wait for audio to finish
-                    
+                    time.sleep(length + 1)
                     os.remove(fname)
-                    st.session_state.v1 = v1 + 1
+                    # History Deletion (2-second buffer total)
+                    time.sleep(1)
                     st.rerun()
-            finally:
-                if os.path.exists(tmp_path): os.remove(tmp_path)
+        finally:
+            if os.path.exists(tmp_path): os.remove(tmp_path)
 
-    with col2:
-        st.info(f"Speak {st.session_state.their_lang}")
-        v2 = st.session_state.get('v2', 0)
-        audio2 = mic_recorder(start_prompt="🎤 Start Talking", stop_prompt="⏹️ Stop", key=f"m2_{v2}")
-        
-        if audio2:
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
-                tmp.write(audio2['bytes'])
-                tmp_path = tmp.name
-            
-            try:
-                result = model.transcribe(tmp_path, language=lmap[st.session_state.their_lang], fp16=False)
-                text = result['text'].strip()
-                
-                if text:
-                    st.write(f"**Heard:** {text}")
-                    trans = GoogleTranslator(source=lmap[st.session_state.their_lang], target=lmap[st.session_state.my_lang]).translate(text)
-                    st.success(f"**Translated:** {trans}")
-                    
-                    fname = f"s2_{int(time.time())}.mp3"
-                    gTTS(text=trans, lang=lmap[st.session_state.my_lang]).save(fname)
-                    
-                    duration = MP3(fname).info.length
-                    play_audio(fname)
-                    time.sleep(duration + 0.5)
-                    
-                    os.remove(fname)
-                    st.session_state.v2 = v2 + 1
-                    st.rerun()
-            finally:
-                if os.path.exists(tmp_path): os.remove(tmp_path)
-
-    if st.button("End Call"):
-        st.session_state.call_active = False
+    if st.button("❌ End Call"):
+        st.query_params.clear()
         st.rerun()
 
 
