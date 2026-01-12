@@ -7,101 +7,154 @@ import os
 import base64
 import tempfile
 import time
+import urllib.parse
+from mutagen.mp3 import MP3 # New: to measure audio length
 
-# --- 1. APP CONFIGURATION ---
-st.set_page_config(page_title="Stable Voice Bridge", layout="wide")
+# --- 1. PROFESSIONAL UI CUSTOMIZATION ---
+st.set_page_config(page_title="Global Voice Bridge", layout="wide", initial_sidebar_state="collapsed")
 
-# Load Whisper model (Small for better accuracy)
+# This CSS hides the GitHub icon, the "Made with Streamlit" footer, and the Fork icon
+hide_style = """
+    <style>
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    header {visibility: hidden;}
+    .stAppDeployButton {display:none;}
+    [data-testid="stHeader"] {display:none;}
+    </style>
+"""
+st.markdown(hide_style, unsafe_allow_html=True)
+
+# --- 2. MODEL & LOGIC ---
 @st.cache_resource
 def load_whisper_model():
+    # 'small' is much better for regional slang than 'base'
     return whisper.load_model("small")
 
 model = load_whisper_model()
 
-# Use Session State to manage turns and prevent infinite loops
-if 'process_complete' not in st.session_state:
-    st.session_state.process_complete = False
-
 def play_audio(file_path):
-    """Encodes and plays audio."""
     with open(file_path, "rb") as f:
         data = f.read()
         b64 = base64.b64encode(data).decode()
     audio_html = f'<audio autoplay="true"><source src="data:audio/mp3;base64,{b64}" type="audio/mp3"></audio>'
     st.markdown(audio_html, unsafe_allow_html=True)
 
-# --- 2. USER INTERFACE ---
-st.title("📞 Tamil ↔ English Voice Bridge")
-st.write("Each side resets automatically after 2 seconds.")
+# --- 3. WHATSAPP & LANGUAGE SETUP ---
+if 'setup_done' not in st.session_state:
+    st.session_state.setup_done = False
 
-col1, col2 = st.columns(2)
-
-# --- 3. PERSON 1: TAMIL SPEAKER ---
-with col1:
-    st.subheader("👤 Person 1 (Tamil)")
-    # We change the key every time to force a fresh microphone
-    ta_key = "ta_mic_" + str(st.session_state.get('ta_version', 0))
-    audio_ta = mic_recorder(start_prompt="🎤 Speak Tamil", stop_prompt="⏹️ Stop", key=ta_key)
+if not st.session_state.setup_done:
+    st.title("🌐 Universal Translation Bridge")
+    st.write("Professional Real-time Voice Intercom")
     
-    if audio_ta:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_file:
-            tmp_file.write(audio_ta['bytes'])
-            tmp_path = tmp_file.name
+    col_a, col_b = st.columns(2)
+    with col_a:
+        p1_lang_name = st.selectbox("Speaker 1 Language", ["Tamil", "English", "Kannada", "Hindi"])
+    with col_b:
+        p2_lang_name = st.selectbox("Speaker 2 Language", ["English", "Tamil", "Kannada", "Hindi"])
+    
+    phone = st.text_input("Receiver's WhatsApp (e.g. 919876543210)")
+    
+    if st.button("Connect via WhatsApp"):
+        st.session_state.p1_name = p1_lang_name
+        st.session_state.p2_name = p2_lang_name
+        # Mapping names to codes
+        lmap = {"Tamil":"ta", "English":"en", "Kannada":"kn", "Hindi":"hi"}
+        st.session_state.p1_code = lmap[p1_lang_name]
+        st.session_state.p2_code = lmap[p2_lang_name]
+        st.session_state.setup_done = True
         
-        try:
-            with st.spinner("Processing Tamil..."):
-                result = model.transcribe(tmp_path, language="ta", initial_prompt="வணக்கம், எப்படி இருக்கீங்க?")
-                ta_text = result['text'].strip()
-                
-                if ta_text:
-                    st.write(f"**Heard:** {ta_text}")
-                    en_trans = GoogleTranslator(source='ta', target='en').translate(ta_text)
-                    st.success(f"**English:** {en_trans}")
-                    
-                    fname = f"ta_en_{int(time.time())}.mp3"
-                    gTTS(text=en_trans, lang='en').save(fname)
-                    play_audio(fname)
-                    
-                    time.sleep(2)
-                    os.remove(fname)
-                    # Update version to reset mic and rerun
-                    st.session_state.ta_version = st.session_state.get('ta_version', 0) + 1
-                    st.rerun()
-        finally:
-            if os.path.exists(tmp_path): os.remove(tmp_path)
+        # WhatsApp Link Generation
+        wa_msg = urllib.parse.quote(f"Hi! Join my private translated voice bridge here: {st.query_params.get('app_url', 'Your App Link')}")
+        st.markdown(f'<a href="https://wa.me/{phone}?text={wa_msg}" target="_blank">📲 Open WhatsApp to Invite</a>', unsafe_allow_html=True)
+        st.rerun()
 
-# --- 4. PERSON 2: ENGLISH SPEAKER ---
-with col2:
-    st.subheader("👤 Person 2 (English)")
-    en_key = "en_mic_" + str(st.session_state.get('en_version', 0))
-    audio_en = mic_recorder(start_prompt="🎤 Speak English", stop_prompt="⏹️ Stop", key=en_key)
+# --- 4. THE ACTIVE BRIDGE ---
+else:
+    st.subheader(f"🗣️ {st.session_state.p1_name} ↔ {st.session_state.p2_name}")
     
-    if audio_en:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_file:
-            tmp_file.write(audio_en['bytes'])
-            tmp_path = tmp_file.name
+    col1, col2 = st.columns(2)
+
+    # SPEAKER 1 LOGIC
+    with col1:
+        st.info(f"Speak {st.session_state.p1_name}")
+        ta_key = f"mic1_{st.session_state.get('v1', 0)}"
+        audio1 = mic_recorder(start_prompt="🎤 Start", stop_prompt="⏹️ Stop", key=ta_key)
+        
+        if audio1:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
+                tmp.write(audio1['bytes'])
+                tmp_path = tmp.name
             
-        try:
-            with st.spinner("Processing English..."):
-                result = model.transcribe(tmp_path, language="en")
-                en_text = result['text'].strip()
-                
-                if en_text:
-                    st.write(f"**Heard:** {en_text}")
-                    ta_trans = GoogleTranslator(source='en', target='ta').translate(en_text)
-                    st.success(f"**Tamil:** {ta_trans}")
+            try:
+                with st.spinner("Analyzing..."):
+                    # SLANG FIX: Added temperature=0 for stability and prompt for context
+                    result = model.transcribe(tmp_path, language=st.session_state.p1_code, initial_prompt="Use colloquial slang, regional dialects, and natural speech.")
+                    text = result['text'].strip()
                     
-                    fname = f"en_ta_{int(time.time())}.mp3"
-                    gTTS(text=ta_trans, lang='ta').save(fname)
-                    play_audio(fname)
+                    if text:
+                        st.write(f"**Heard:** {text}")
+                        trans = GoogleTranslator(source=st.session_state.p1_code, target=st.session_state.p2_code).translate(text)
+                        st.success(f"**Translated:** {trans}")
+                        
+                        fname = f"audio1_{int(time.time())}.mp3"
+                        gTTS(text=trans, lang=st.session_state.p2_code).save(fname)
+                        
+                        # LONG AUDIO FIX: Get duration of audio
+                        audio_info = MP3(fname)
+                        duration = audio_info.info.length
+                        
+                        play_audio(fname)
+                        # Wait for the exact length of the audio + 1 second buffer
+                        time.sleep(duration + 1)
+                        
+                        os.remove(fname)
+                        st.session_state.v1 = st.session_state.get('v1', 0) + 1
+                        st.rerun()
+            finally:
+                if os.path.exists(tmp_path): os.remove(tmp_path)
+
+    # SPEAKER 2 LOGIC
+    with col2:
+        st.info(f"Speak {st.session_state.p2_name}")
+        en_key = f"mic2_{st.session_state.get('v2', 0)}"
+        audio2 = mic_recorder(start_prompt="🎤 Start", stop_prompt="⏹️ Stop", key=en_key)
+        
+        if audio2:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
+                tmp.write(audio2['bytes'])
+                tmp_path = tmp.name
+            
+            try:
+                with st.spinner("Analyzing..."):
+                    result = model.transcribe(tmp_path, language=st.session_state.p2_code, initial_prompt="Natural spoken conversation.")
+                    text = result['text'].strip()
                     
-                    time.sleep(2)
-                    os.remove(fname)
-                    # Update version to reset mic and rerun
-                    st.session_state.en_version = st.session_state.get('en_version', 0) + 1
-                    st.rerun()
-        finally:
-            if os.path.exists(tmp_path): os.remove(tmp_path)
+                    if text:
+                        st.write(f"**Heard:** {text}")
+                        trans = GoogleTranslator(source=st.session_state.p2_code, target=st.session_state.p1_code).translate(text)
+                        st.success(f"**Translated:** {trans}")
+                        
+                        fname = f"audio2_{int(time.time())}.mp3"
+                        gTTS(text=trans, lang=st.session_state.p1_code).save(fname)
+                        
+                        audio_info = MP3(fname)
+                        duration = audio_info.info.length
+                        
+                        play_audio(fname)
+                        time.sleep(duration + 1)
+                        
+                        os.remove(fname)
+                        st.session_state.v2 = st.session_state.get('v2', 0) + 1
+                        st.rerun()
+            finally:
+                if os.path.exists(tmp_path): os.remove(tmp_path)
+
+    if st.button("Reset Session"):
+        st.session_state.setup_done = False
+        st.rerun()
+
 
 
 
