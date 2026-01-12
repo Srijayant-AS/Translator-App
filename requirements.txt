@@ -1,7 +1,9 @@
 streamlit
 streamlit-mic-recorder
 openai-whisper
-deep-translator
+deep_translator
 gTTS
 legacy-cgi
+mutagen
+
 
