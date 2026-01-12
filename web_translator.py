@@ -6,7 +6,7 @@ from gtts import gTTS
 import os, base64, tempfile, time, urllib.parse, uuid
 from mutagen.mp3 import MP3
 
-# --- 1. CLEAN UI ---
+# --- 1. CLEAN UI & STYLING ---
 st.set_page_config(page_title="AI Voice Bridge", layout="wide")
 st.markdown("""
     <style>
@@ -15,7 +15,15 @@ st.markdown("""
     header {visibility: hidden;}
     .stAppDeployButton {display:none;}
     [data-testid="stHeader"] {display:none;}
-    div[data-testid="stToolbar"] {visibility: hidden;}
+    
+    /* Custom Styling for the Copy Section */
+    .copy-box {
+        background-color: #f0f2f6;
+        padding: 15px;
+        border-radius: 10px;
+        border: 2px solid #007bff;
+        margin-bottom: 10px;
+    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -43,16 +51,12 @@ if not room_id:
     my_l = st.selectbox("I will speak in:", ["Tamil", "English", "Kannada", "Hindi"])
     phone = st.text_input("Receiver's WhatsApp (e.g., 919876543210)")
 
-    # Unique Room Generation
     if 'generated_url' not in st.session_state:
         st.session_state.generated_url = ""
 
     if st.button("Step 1: Create Secure Room"):
         new_room = str(uuid.uuid4())[:8]
-        # This builds the URL based on the current page address
-        # It handles the URL detection automatically
-        base_url = "https://share.streamlit.io" # Placeholder, will be ignored by the copy widget
-        # The code below uses a standard Streamlit text input with a copy button
+        # We only generate the suffix; the user pastes this after their main URL
         st.session_state.generated_url = f"?room={new_room}&slang={my_l}"
         st.session_state.room_id = new_room
         st.session_state.my_l = my_l
@@ -61,9 +65,31 @@ if not room_id:
         st.write("---")
         st.success("✅ Room Prepared!")
         
-        # This is the most reliable way to copy in Streamlit
-        # It shows the link and provides a 'copy' icon next to it
-        st.text_input("Copy this link suffix:", st.session_state.generated_url, help="Click the icon on the right to copy")
+        # --- HIGH VISIBILITY COPY BUTTON ---
+        url_to_copy = st.session_state.generated_url
+        
+        # HTML/JS for a big, clear copy button
+        copy_html = f"""
+            <div class="copy-box">
+                <p style="color:black; font-weight:bold;">Unique Room Suffix:</p>
+                <input type="text" value="{url_to_copy}" id="urlInput" style="width:100%; padding:10px; margin-bottom:10px;">
+                <button onclick="copyFunction()" style="width:100%; background-color:#007bff; color:white; padding:10px; border:none; border-radius:5px; font-weight:bold; cursor:pointer;">
+                    📋 CLICK HERE TO COPY LINK
+                </button>
+            </div>
+
+            <script>
+            function copyFunction() {{
+                var copyText = document.getElementById("urlInput");
+                copyText.select();
+                copyText.setSelectionRange(0, 99999); /* For mobile devices */
+                navigator.clipboard.writeText(copyText.value).then(() => {{
+                    alert("Copied: " + copyText.value);
+                }});
+            }}
+            </script>
+        """
+        st.components.v1.html(copy_html, height=180)
         
         wa_msg = urllib.parse.quote(f"Join my private voice bridge. Please click the link I'm about to send.")
         wa_url = f"https://api.whatsapp.com/send?phone={phone}&text={wa_msg}"
@@ -71,7 +97,7 @@ if not room_id:
         st.markdown(f'''
             <a href="{wa_url}" target="_blank" style="text-decoration:none;">
                 <div style="background-color:#25D366;color:white;padding:15px;border-radius:10px;text-align:center;font-weight:bold;margin-top:10px;">
-                    Step 2: Open WhatsApp & Paste Link
+                    Step 2: Open WhatsApp & Paste
                 </div>
             </a>''', unsafe_allow_html=True)
         
@@ -100,9 +126,8 @@ else:
     my_label, their_label = (s_lang, r_lang) if role == "sender" else (r_lang, s_lang)
     
     lmap = {"Tamil":"ta", "English":"en", "Kannada":"kn", "Hindi":"hi"}
-    st.info(f"🎤 Speak now in {my_label}")
+    st.info(f"🎤 Push to talk in {my_label}")
     
-    # The microphone resets using the room_id and role to prevent history crossover
     aud = mic_recorder(start_prompt="Start Talking", stop_prompt="Stop", key=f"mic_{r_id}_{role}")
 
     if aud:
@@ -111,7 +136,7 @@ else:
             tmp_path = tmp.name
         try:
             with st.spinner("Processing..."):
-                result = model.transcribe(tmp_path, language=lmap[my_label], fp16=False, initial_prompt="Use local slang.")
+                result = model.transcribe(tmp_path, language=lmap[my_label], fp16=False, initial_prompt="Colloquial slang.")
                 text = result['text'].strip()
                 if text:
                     st.write(f"**Heard:** {text}")
@@ -124,7 +149,7 @@ else:
                     play_audio(fname)
                     time.sleep(length + 1)
                     os.remove(fname)
-                    time.sleep(1) # Final pause for user to read
+                    time.sleep(1)
                     st.rerun()
         finally:
             if os.path.exists(tmp_path): os.remove(tmp_path)
@@ -132,6 +157,7 @@ else:
     if st.button("❌ End Call"):
         st.query_params.clear()
         st.rerun()
+
 
 
 
