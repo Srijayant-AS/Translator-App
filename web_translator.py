@@ -8,27 +8,26 @@ import base64
 import tempfile
 import time
 import urllib.parse
-from mutagen.mp3 import MP3 # New: to measure audio length
+from mutagen.mp3 import MP3
 
-# --- 1. PROFESSIONAL UI CUSTOMIZATION ---
-st.set_page_config(page_title="Global Voice Bridge", layout="wide", initial_sidebar_state="collapsed")
+# --- 1. PROFESSIONAL UI & BRANDING ---
+st.set_page_config(page_title="AI Voice Bridge", layout="wide")
 
-# This CSS hides the GitHub icon, the "Made with Streamlit" footer, and the Fork icon
-hide_style = """
+# Hide Streamlit Branding
+st.markdown("""
     <style>
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     header {visibility: hidden;}
     .stAppDeployButton {display:none;}
-    [data-testid="stHeader"] {display:none;}
     </style>
-"""
-st.markdown(hide_style, unsafe_allow_html=True)
+""", unsafe_allow_html=True)
 
-# --- 2. MODEL & LOGIC ---
+# --- 2. FAST MODEL LOADING ---
 @st.cache_resource
 def load_whisper_model():
-    # 'small' is much better for regional slang than 'base'
+    # 'small' is used for slang accuracy; for max speed 'base' is faster 
+    # but 'small' is better for your slang requirement.
     return whisper.load_model("small")
 
 model = load_whisper_model()
@@ -40,47 +39,57 @@ def play_audio(file_path):
     audio_html = f'<audio autoplay="true"><source src="data:audio/mp3;base64,{b64}" type="audio/mp3"></audio>'
     st.markdown(audio_html, unsafe_allow_html=True)
 
-# --- 3. WHATSAPP & LANGUAGE SETUP ---
-if 'setup_done' not in st.session_state:
-    st.session_state.setup_done = False
+# --- 3. CALL SETUP & WHATSAPP LOGIC ---
+if 'call_active' not in st.session_state:
+    st.session_state.call_active = False
 
-if not st.session_state.setup_done:
-    st.title("🌐 Universal Translation Bridge")
-    st.write("Professional Real-time Voice Intercom")
+if not st.session_state.call_active:
+    st.title("📞 AI Voice Bridge Setup")
     
-    col_a, col_b = st.columns(2)
-    with col_a:
-        p1_lang_name = st.selectbox("Speaker 1 Language", ["Tamil", "English", "Kannada", "Hindi"])
-    with col_b:
-        p2_lang_name = st.selectbox("Speaker 2 Language", ["English", "Tamil", "Kannada", "Hindi"])
+    # 1. User selects their own language
+    my_lang = st.selectbox("I will speak in:", ["Tamil", "English", "Kannada", "Hindi"])
     
-    phone = st.text_input("Receiver's WhatsApp (e.g. 919876543210)")
+    # 2. User selects what the other person speaks
+    their_lang = st.selectbox("They will speak in:", ["English", "Tamil", "Kannada", "Hindi"])
     
-    if st.button("Connect via WhatsApp"):
-        st.session_state.p1_name = p1_lang_name
-        st.session_state.p2_name = p2_lang_name
-        # Mapping names to codes
-        lmap = {"Tamil":"ta", "English":"en", "Kannada":"kn", "Hindi":"hi"}
-        st.session_state.p1_code = lmap[p1_lang_name]
-        st.session_state.p2_code = lmap[p2_lang_name]
-        st.session_state.setup_done = True
+    # 3. WhatsApp Number
+    target_phone = st.text_input("Receiver's WhatsApp Number (e.g., 919876543210)")
+    
+    if st.button("Generate Call Link & Invite"):
+        # We use query parameters so the receiver knows which languages are set
+        app_url = "https://your-app-link.streamlit.app" # REPLACE THIS WITH YOUR REAL URL
+        invite_msg = f"Join my translated voice call: {app_url}/?sender_lang={my_lang}&receiver_lang={their_lang}"
+        encoded_msg = urllib.parse.quote(invite_msg)
+        whatsapp_url = f"https://api.whatsapp.com/send?phone={target_phone}&text={encoded_msg}"
         
-        # WhatsApp Link Generation
-        wa_msg = urllib.parse.quote(f"Hi! Join my private translated voice bridge here: {st.query_params.get('app_url', 'Your App Link')}")
-        st.markdown(f'<a href="https://wa.me/{phone}?text={wa_msg}" target="_blank">📲 Open WhatsApp to Invite</a>', unsafe_allow_html=True)
-        st.rerun()
+        # This creates a real clickable button for WhatsApp
+        st.markdown(f'''
+            <a href="{whatsapp_url}" target="_blank" style="text-decoration: none;">
+                <div style="background-color: #25D366; color: white; padding: 15px; text-align: center; border-radius: 10px; font-weight: bold;">
+                    Click Here to Send WhatsApp Invitation
+                </div>
+            </a>
+            ''', unsafe_allow_html=True)
+        
+        # Save choices
+        st.session_state.my_lang = my_lang
+        st.session_state.their_lang = their_lang
+        st.session_state.call_active = True
 
-# --- 4. THE ACTIVE BRIDGE ---
+# --- 4. THE ACTIVE CALL INTERFACE ---
 else:
-    st.subheader(f"🗣️ {st.session_state.p1_name} ↔ {st.session_state.p2_name}")
+    # Logic to check if user is the Sender or Receiver via URL
+    # For now, we provide both buttons so either side can talk
+    st.subheader(f"Call Active: {st.session_state.my_lang} ↔ {st.session_state.their_lang}")
+    
+    lmap = {"Tamil":"ta", "English":"en", "Kannada":"kn", "Hindi":"hi"}
     
     col1, col2 = st.columns(2)
 
-    # SPEAKER 1 LOGIC
     with col1:
-        st.info(f"Speak {st.session_state.p1_name}")
-        ta_key = f"mic1_{st.session_state.get('v1', 0)}"
-        audio1 = mic_recorder(start_prompt="🎤 Start", stop_prompt="⏹️ Stop", key=ta_key)
+        st.info(f"Speak {st.session_state.my_lang}")
+        v1 = st.session_state.get('v1', 0)
+        audio1 = mic_recorder(start_prompt="🎤 Start Talking", stop_prompt="⏹️ Stop", key=f"m1_{v1}")
         
         if audio1:
             with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
@@ -88,38 +97,33 @@ else:
                 tmp_path = tmp.name
             
             try:
-                with st.spinner("Analyzing..."):
-                    # SLANG FIX: Added temperature=0 for stability and prompt for context
-                    result = model.transcribe(tmp_path, language=st.session_state.p1_code, initial_prompt="Use colloquial slang, regional dialects, and natural speech.")
-                    text = result['text'].strip()
+                # SPEED IMPROVEMENT: Use fp16=False if running on CPU (Streamlit Cloud)
+                result = model.transcribe(tmp_path, language=lmap[st.session_state.my_lang], fp16=False)
+                text = result['text'].strip()
+                
+                if text:
+                    st.write(f"**Heard:** {text}")
+                    trans = GoogleTranslator(source=lmap[st.session_state.my_lang], target=lmap[st.session_state.their_lang]).translate(text)
+                    st.success(f"**Translated:** {trans}")
                     
-                    if text:
-                        st.write(f"**Heard:** {text}")
-                        trans = GoogleTranslator(source=st.session_state.p1_code, target=st.session_state.p2_code).translate(text)
-                        st.success(f"**Translated:** {trans}")
-                        
-                        fname = f"audio1_{int(time.time())}.mp3"
-                        gTTS(text=trans, lang=st.session_state.p2_code).save(fname)
-                        
-                        # LONG AUDIO FIX: Get duration of audio
-                        audio_info = MP3(fname)
-                        duration = audio_info.info.length
-                        
-                        play_audio(fname)
-                        # Wait for the exact length of the audio + 1 second buffer
-                        time.sleep(duration + 1)
-                        
-                        os.remove(fname)
-                        st.session_state.v1 = st.session_state.get('v1', 0) + 1
-                        st.rerun()
+                    fname = f"s1_{int(time.time())}.mp3"
+                    gTTS(text=trans, lang=lmap[st.session_state.their_lang]).save(fname)
+                    
+                    # Duration check for full playback
+                    duration = MP3(fname).info.length
+                    play_audio(fname)
+                    time.sleep(duration + 0.5) # Wait for audio to finish
+                    
+                    os.remove(fname)
+                    st.session_state.v1 = v1 + 1
+                    st.rerun()
             finally:
                 if os.path.exists(tmp_path): os.remove(tmp_path)
 
-    # SPEAKER 2 LOGIC
     with col2:
-        st.info(f"Speak {st.session_state.p2_name}")
-        en_key = f"mic2_{st.session_state.get('v2', 0)}"
-        audio2 = mic_recorder(start_prompt="🎤 Start", stop_prompt="⏹️ Stop", key=en_key)
+        st.info(f"Speak {st.session_state.their_lang}")
+        v2 = st.session_state.get('v2', 0)
+        audio2 = mic_recorder(start_prompt="🎤 Start Talking", stop_prompt="⏹️ Stop", key=f"m2_{v2}")
         
         if audio2:
             with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
@@ -127,32 +131,29 @@ else:
                 tmp_path = tmp.name
             
             try:
-                with st.spinner("Analyzing..."):
-                    result = model.transcribe(tmp_path, language=st.session_state.p2_code, initial_prompt="Natural spoken conversation.")
-                    text = result['text'].strip()
+                result = model.transcribe(tmp_path, language=lmap[st.session_state.their_lang], fp16=False)
+                text = result['text'].strip()
+                
+                if text:
+                    st.write(f"**Heard:** {text}")
+                    trans = GoogleTranslator(source=lmap[st.session_state.their_lang], target=lmap[st.session_state.my_lang]).translate(text)
+                    st.success(f"**Translated:** {trans}")
                     
-                    if text:
-                        st.write(f"**Heard:** {text}")
-                        trans = GoogleTranslator(source=st.session_state.p2_code, target=st.session_state.p1_code).translate(text)
-                        st.success(f"**Translated:** {trans}")
-                        
-                        fname = f"audio2_{int(time.time())}.mp3"
-                        gTTS(text=trans, lang=st.session_state.p1_code).save(fname)
-                        
-                        audio_info = MP3(fname)
-                        duration = audio_info.info.length
-                        
-                        play_audio(fname)
-                        time.sleep(duration + 1)
-                        
-                        os.remove(fname)
-                        st.session_state.v2 = st.session_state.get('v2', 0) + 1
-                        st.rerun()
+                    fname = f"s2_{int(time.time())}.mp3"
+                    gTTS(text=trans, lang=lmap[st.session_state.my_lang]).save(fname)
+                    
+                    duration = MP3(fname).info.length
+                    play_audio(fname)
+                    time.sleep(duration + 0.5)
+                    
+                    os.remove(fname)
+                    st.session_state.v2 = v2 + 1
+                    st.rerun()
             finally:
                 if os.path.exists(tmp_path): os.remove(tmp_path)
 
-    if st.button("Reset Session"):
-        st.session_state.setup_done = False
+    if st.button("End Call"):
+        st.session_state.call_active = False
         st.rerun()
 
 
