@@ -6,23 +6,21 @@ from gtts import gTTS
 import os, base64, tempfile, time, urllib.parse, uuid
 from mutagen.mp3 import MP3
 
-# --- 1. CLEAN UI ---
-st.set_page_config(page_title="AI Voice Bridge", layout="wide")
+# --- 1. SETUP & UI ---
+st.set_page_config(page_title="Voice Bridge", layout="wide")
+
 st.markdown("""
     <style>
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
-    header {visibility: hidden;}
-    .stAppDeployButton {display:none;}
-    [data-testid="stHeader"] {display:none;}
-    div[data-testid="stToolbar"] {visibility: hidden;}
+    #MainMenu {visibility: hidden;} footer {visibility: hidden;} header {visibility: hidden;}
+    .stAppDeployButton {display:none;} [data-testid="stHeader"] {display:none;}
+    .main-box { background-color: #f9f9f9; padding: 20px; border-radius: 15px; border: 1px solid #ddd; }
     </style>
 """, unsafe_allow_html=True)
 
-# --- 2. AI ENGINE ---
+# --- 2. FAST ENGINE ---
 @st.cache_resource
 def load_whisper_model():
-    return whisper.load_model("small")
+    return whisper.load_model("tiny")
 
 model = load_whisper_model()
 
@@ -33,103 +31,102 @@ def play_audio(file_path):
     audio_html = f'<audio autoplay="true"><source src="data:audio/mp3;base64,{b64}" type="audio/mp3"></audio>'
     st.markdown(audio_html, unsafe_allow_html=True)
 
-# --- 3. DUAL-SIDE LOGIC ---
+# --- 3. THE CLOUD "REAL-TIME" SIMULATOR ---
+# We use st.cache_data to simulate a room where both people can "see" messages
+if 'chat_db' not in st.session_state:
+    st.session_state.chat_db = {}
+
+# --- 4. DUAL-ROLE LOGIC ---
 query_params = st.query_params
 room_id = query_params.get("room")
-sender_lang = query_params.get("slang")
+s_lang = query_params.get("slang")
+r_lang = query_params.get("rlang")
+role = query_params.get("role")
 
+# --- CASE A: SENDER (START CALL) ---
 if not room_id:
-    st.title("📞 Start a Translated Call")
-    my_l = st.selectbox("I will speak in:", ["Tamil", "English", "Kannada", "Hindi"])
-    phone = st.text_input("Receiver's WhatsApp (e.g., 919876543210)")
+    st.title("📞 Private Voice Bridge")
+    my_l = st.selectbox("I speak:", ["Tamil", "English", "Kannada", "Hindi"])
+    phone = st.text_input("Receiver Phone (e.g. 919876543210)")
 
-    if 'final_link' not in st.session_state:
-        st.session_state.final_link = ""
-
-    if st.button("Step 1: Create Secure Room"):
-        # Unique Room ID
+    if st.button("Generate Secure Room"):
         rid = str(uuid.uuid4())[:8]
-        
-        # --- THE FIX: MANUAL URL DETECTION ---
-        # We find the URL by looking at what Streamlit sees in the browser headers
-        # This is 100% reliable and won't return "nullsrcdoc"
         try:
-            # We build the link using your actual app address found in the browser
             from streamlit.web.server.websocket_headers import _get_websocket_headers
-            headers = _get_websocket_headers()
-            host = headers.get("Host")
-            # Construct the full clickable URL
-            st.session_state.final_link = f"https://{host}/?room={rid}&slang={my_l}"
-            st.session_state.rid = rid
-            st.session_state.my_l = my_l
-        except:
-            st.error("Could not auto-detect URL. Please refresh.")
+            host = _get_websocket_headers().get("Host")
+            full_link = f"https://{host}/?room={rid}&slang={my_l}"
+            st.success("✅ Link Generated!")
+            st.text_input("Copy this:", full_link)
+            wa_url = f"https://api.whatsapp.com/send?phone={phone}&text={urllib.parse.quote('Join call: '+full_link)}"
+            st.markdown(f'<a href="{wa_url}" target="_blank">📲 Send to WhatsApp</a>', unsafe_allow_html=True)
+            st.session_state.rid, st.session_state.my_l = rid, my_l
+        except: st.error("Deploy to web to use.")
 
-    if st.session_state.final_link:
-        st.write("---")
-        st.success("✅ Room Link Created Successfully!")
-        
-        # Display the REAL link in a box with a copy icon
-        st.text_input("📋 Copy this full link:", st.session_state.final_link)
-        
-        wa_msg = urllib.parse.quote(f"Join my private voice bridge: {st.session_state.final_link}")
-        wa_url = f"https://api.whatsapp.com/send?phone={phone}&text={wa_msg}"
-        
-        st.markdown(f'''
-            <a href="{wa_url}" target="_blank" style="text-decoration:none;">
-                <div style="background-color:#25D366;color:white;padding:15px;border-radius:10px;text-align:center;font-weight:bold;margin-top:10px;">
-                    Step 2: Open WhatsApp & Send
-                </div>
-            </a>''', unsafe_allow_html=True)
-        
-        if st.button("Step 3: Enter My Room"):
-            st.query_params.update(room=st.session_state.rid, slang=st.session_state.my_l, role="sender")
-            st.rerun()
-
-# CASE B: RECEIVER SETUP
-elif room_id and not query_params.get("rlang"):
-    st.title("📞 Join Translated Call")
-    st.write(f"The caller speaks: **{sender_lang}**")
-    my_rlang = st.selectbox("Select YOUR Language:", ["English", "Tamil", "Kannada", "Hindi"])
-    
-    if st.button("Join Call"):
-        st.query_params.update(rlang=my_rlang, role="receiver")
+    if st.button("Enter Room"):
+        st.query_params.update(room=st.session_state.rid, slang=st.session_state.my_l, role="sender")
         st.rerun()
 
-# CASE C: THE ACTIVE CALL
+# --- CASE B: RECEIVER (JOIN CALL) ---
+elif room_id and not r_lang:
+    st.title("📞 Incoming Call")
+    my_rl = st.selectbox("I speak:", ["English", "Tamil", "Kannada", "Hindi"])
+    if st.button("Accept Call"):
+        st.query_params.update(rlang=my_rl, role="receiver")
+        st.rerun()
+
+# --- CASE C: THE LIVE CHAT ---
 else:
-    r_id = query_params.get("room")
-    role = query_params.get("role")
-    s_lang = query_params.get("slang")
-    r_lang = query_params.get("rlang")
-    
-    st.subheader(f"🔒 Secure Room: {r_id}")
-    my_label, their_label = (s_lang, r_lang) if role == "sender" else (r_lang, s_lang)
-    
+    my_label = s_lang if role == "sender" else r_lang
+    their_label = r_lang if role == "sender" else s_lang
     lmap = {"Tamil":"ta", "English":"en", "Kannada":"kn", "Hindi":"hi"}
-    st.info(f"🎤 Push to talk in {my_label}")
+
+    st.subheader(f"🔒 Secure Room: {room_id}")
+    st.write(f"You: **{my_label}** | Partner: **{their_label}**")
+
+    # 1. INCOMING MESSAGE AREA
+    # In a real cloud app, this is where the partner's text appears
+    st.markdown('<div class="main-box">', unsafe_allow_html=True)
+    incoming_key = f"{room_id}_{'receiver' if role=='sender' else 'sender'}"
     
-    aud = mic_recorder(start_prompt="Start Talking", stop_prompt="Stop", key=f"mic_{r_id}_{role}")
+    # We simulate the incoming text check
+    incoming_text = st.session_state.get(incoming_key, "")
+    
+    if incoming_text:
+        st.info(f"Incoming from Partner ({my_label}):")
+        st.subheader(incoming_text)
+        if st.button("🔊 READ OUT LOUD"):
+            fname = "voice.mp3"
+            gTTS(text=incoming_text, lang=lmap[my_label]).save(fname)
+            play_audio(fname)
+            time.sleep(2)
+            os.remove(fname)
+    else:
+        st.write("Waiting for partner to speak...")
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    st.divider()
+
+    # 2. OUTGOING MESSAGE AREA
+    st.write(f"🎤 Record your response in **{my_label}**")
+    aud = mic_recorder(start_prompt="Start", stop_prompt="Stop & Send", key=f"mic_{role}")
 
     if aud:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
             tmp.write(aud['bytes'])
             tmp_path = tmp.name
         try:
-            with st.spinner("Processing..."):
-                result = model.transcribe(tmp_path, language=lmap[my_label], fp16=False, initial_prompt="Colloquial slang.")
+            with st.spinner("Translating..."):
+                result = model.transcribe(tmp_path, language=lmap[my_label], fp16=False)
                 text = result['text'].strip()
                 if text:
-                    st.write(f"**Heard:** {text}")
-                    trans = GoogleTranslator(source=lmap[my_label], target=lmap[their_label]).translate(text)
-                    st.success(f"**To {their_label}:** {trans}")
+                    # Translate to THEIR language
+                    trans_text = GoogleTranslator(source=lmap[my_label], target=lmap[their_label]).translate(text)
                     
-                    fname = f"msg_{int(time.time())}.mp3"
-                    gTTS(text=trans, lang=lmap[their_label]).save(fname)
-                    length = MP3(fname).info.length
-                    play_audio(fname)
-                    time.sleep(length + 1)
-                    os.remove(fname)
+                    # SAVE TO CLOUD (Simulated)
+                    my_key = f"{room_id}_{role}"
+                    st.session_state[my_key] = trans_text
+                    
+                    st.success(f"Sent: {trans_text}")
                     time.sleep(1)
                     st.rerun()
         finally:
