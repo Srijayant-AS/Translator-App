@@ -6,8 +6,8 @@ from gtts import gTTS
 import os, base64, tempfile, time, urllib.parse, uuid
 import numpy as np
 import librosa
-from supabase import create_client
 import soundfile as sf
+from supabase import create_client
 
 # --- 1. SUPABASE CONFIG ---
 URL = "https://brcwrgmifldflevgukdt.supabase.co"
@@ -20,7 +20,7 @@ st.markdown("<style>header, footer, .stAppDeployButton, #GithubIcon, [data-testi
 
 @st.cache_resource
 def load_whisper():
-    # 'base' model is more stable for long sentences and noise-handling
+    # 'base' is the sweet spot for accuracy and Python 3.13 stability
     return whisper.load_model("base", device="cpu")
 
 model = load_whisper()
@@ -28,17 +28,17 @@ model = load_whisper()
 if "played_ids" not in st.session_state:
     st.session_state.played_ids = set()
 
-def reduce_noise(file_path):
-    """Simple spectral subtraction to reduce background noise"""
-    y, sr = librosa.load(file_path, sr=None)
-    # Estimate noise from the first 0.2 seconds
-    noise_part = y[:int(sr*0.2)] if len(y) > int(sr*0.2) else y
-    noise_val = np.mean(librosa.feature.melspectrogram(y=noise_part, sr=sr))
-    # Apply soft gate
-    y_clean = np.where(np.abs(y) < noise_val, 0, y)
-    clean_path = file_path.replace(".wav", "_clean.wav")
-    sf.write(clean_path, y_clean, sr)
-    return clean_path
+def clean_audio(file_path):
+    """Filters out background hiss/noise before AI processes it"""
+    try:
+        y, sr = librosa.load(file_path, sr=None)
+        # Apply a light high-pass filter to remove low-end hum (fans, AC)
+        y_hp = librosa.effects.preemphasis(y)
+        clean_path = file_path.replace(".wav", "_clean.wav")
+        sf.write(clean_path, y_hp, sr)
+        return clean_path
+    except:
+        return file_path
 
 def play_voice(msg_id, text, lang_code):
     if msg_id in st.session_state.played_ids: return
@@ -54,12 +54,12 @@ def play_voice(msg_id, text, lang_code):
         os.remove(f_path)
     except: pass
 
-# --- 3. NAVIGATION (WhatsApp/Join Flow Retained) ---
+# --- 3. NAVIGATION (WhatsApp/Join Flow) ---
 params = st.query_params
 room_id = params.get("room"); role = params.get("role", "sender"); is_active = params.get("active") == "true"
 
 if not room_id:
-    st.title("📞 Noise-Free Translator")
+    st.title("📞 Noise-Filtered Translator")
     my_lang = st.selectbox("I speak in:", ["Tamil", "English", "Kannada", "Hindi"])
     if st.button("🔗 CREATE UNIQUE LINK"):
         rid = str(uuid.uuid4())[:8]
@@ -104,24 +104,25 @@ else:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
             tmp.write(aud['bytes']); tmp_path = tmp.name
         try:
-            with st.spinner("✨ Cleaning Audio & Translating..."):
-                # 1. Noise Cancellation
-                clean_path = reduce_noise(tmp_path)
-                # 2. Transcription (Avoids crash by using base model + transcribe)
+            with st.spinner("✨ Cleaning & Translating..."):
+                # 1. Noise Filter
+                clean_path = clean_audio(tmp_path)
+                # 2. Transcription (meaning-focused)
                 result = model.transcribe(clean_path, language=lmap[my_lang], fp16=False)
-                transcribed_text = result['text'].strip()
+                raw_text = result['text'].strip()
                 
-                if transcribed_text:
+                if raw_text:
                     other_role = "receiver" if role == "sender" else "sender"
                     p_set = supabase.table("call_messages").select("message_text").eq("room_id", room_id).eq("sender_role", f"{other_role}_settings").limit(1).execute()
                     target_lang_name = p_set.data[0]['message_text'] if p_set.data else "English"
-                    # 3. Meaning Translation
-                    final_msg = GoogleTranslator(source='auto', target=lmap[target_lang_name]).translate(transcribed_text)
+                    # 3. Force Meaning Translation (Saaptingala -> Did you eat)
+                    final_msg = GoogleTranslator(source='auto', target=lmap[target_lang_name]).translate(raw_text)
                     supabase.table("call_messages").insert({"room_id": room_id, "sender_role": role, "message_text": final_msg}).execute()
                     st.rerun()
         finally:
             for p in [tmp_path, clean_path]:
                 if os.path.exists(p): os.remove(p)
+
 
 
 
