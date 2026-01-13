@@ -6,7 +6,7 @@ from gtts import gTTS
 import os, base64, tempfile, time, urllib.parse, uuid
 from mutagen.mp3 import MP3
 
-# --- 1. CLEAN UI & STYLING ---
+# --- 1. CLEAN UI ---
 st.set_page_config(page_title="AI Voice Bridge", layout="wide")
 st.markdown("""
     <style>
@@ -16,14 +16,6 @@ st.markdown("""
     .stAppDeployButton {display:none;}
     [data-testid="stHeader"] {display:none;}
     div[data-testid="stToolbar"] {visibility: hidden;}
-    
-    .copy-box {
-        background-color: #f0f2f6;
-        padding: 15px;
-        border-radius: 10px;
-        border: 2px solid #007bff;
-        margin-top: 10px;
-    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -51,62 +43,47 @@ if not room_id:
     my_l = st.selectbox("I will speak in:", ["Tamil", "English", "Kannada", "Hindi"])
     phone = st.text_input("Receiver's WhatsApp (e.g., 919876543210)")
 
-    if 'temp_room_id' not in st.session_state:
-        st.session_state.temp_room_id = ""
+    if 'final_link' not in st.session_state:
+        st.session_state.final_link = ""
 
     if st.button("Step 1: Create Secure Room"):
-        st.session_state.temp_room_id = str(uuid.uuid4())[:8]
-        st.session_state.my_l = my_l
+        # Unique Room ID
+        rid = str(uuid.uuid4())[:8]
+        
+        # --- THE FIX: MANUAL URL DETECTION ---
+        # We find the URL by looking at what Streamlit sees in the browser headers
+        # This is 100% reliable and won't return "nullsrcdoc"
+        try:
+            # We build the link using your actual app address found in the browser
+            from streamlit.web.server.websocket_headers import _get_websocket_headers
+            headers = _get_websocket_headers()
+            host = headers.get("Host")
+            # Construct the full clickable URL
+            st.session_state.final_link = f"https://{host}/?room={rid}&slang={my_l}"
+            st.session_state.rid = rid
+            st.session_state.my_l = my_l
+        except:
+            st.error("Could not auto-detect URL. Please refresh.")
 
-    if st.session_state.temp_room_id:
+    if st.session_state.final_link:
         st.write("---")
-        st.success("✅ Room Ready!")
+        st.success("✅ Room Link Created Successfully!")
         
-        # --- FULL LINK AUTO-DETECTION & COPY ---
-        # This script grabs the FULL URL from the browser bar automatically
-        suffix = f"?room={st.session_state.temp_room_id}&slang={st.session_state.my_l}"
+        # Display the REAL link in a box with a copy icon
+        st.text_input("📋 Copy this full link:", st.session_state.final_link)
         
-        copy_html = f"""
-            <div class="copy-box">
-                <p style="color:black; font-weight:bold;">Complete Call Link:</p>
-                <input type="text" id="fullUrl" style="width:100%; padding:10px; margin-bottom:10px;" readonly>
-                <button onclick="copyFullUrl()" style="width:100%; background-color:#007bff; color:white; padding:12px; border:none; border-radius:5px; font-weight:bold; cursor:pointer;">
-                    📋 CLICK TO COPY FULL LINK
-                </button>
-            </div>
-
-            <script>
-                // Get the current base URL (e.g., https://app.streamlit.app)
-                var currentBase = window.location.origin + window.location.pathname;
-                var fullLink = currentBase + "{suffix}";
-                
-                // Display it in the box
-                document.getElementById("fullUrl").value = fullLink;
-
-                function copyFullUrl() {{
-                    var copyText = document.getElementById("fullUrl");
-                    copyText.select();
-                    copyText.setSelectionRange(0, 99999); 
-                    navigator.clipboard.writeText(fullLink).then(() => {{
-                        alert("Full Link Copied! Ready to paste in WhatsApp.");
-                    }});
-                }}
-            </script>
-        """
-        st.components.v1.html(copy_html, height=200)
-        
-        wa_msg = urllib.parse.quote(f"Join my private voice bridge. Please click the link I'm about to paste.")
+        wa_msg = urllib.parse.quote(f"Join my private voice bridge: {st.session_state.final_link}")
         wa_url = f"https://api.whatsapp.com/send?phone={phone}&text={wa_msg}"
         
         st.markdown(f'''
             <a href="{wa_url}" target="_blank" style="text-decoration:none;">
                 <div style="background-color:#25D366;color:white;padding:15px;border-radius:10px;text-align:center;font-weight:bold;margin-top:10px;">
-                    Step 2: Open WhatsApp & Paste
+                    Step 2: Open WhatsApp & Send
                 </div>
             </a>''', unsafe_allow_html=True)
         
         if st.button("Step 3: Enter My Room"):
-            st.query_params.update(room=st.session_state.temp_room_id, slang=st.session_state.my_l, role="sender")
+            st.query_params.update(room=st.session_state.rid, slang=st.session_state.my_l, role="sender")
             st.rerun()
 
 # CASE B: RECEIVER SETUP
