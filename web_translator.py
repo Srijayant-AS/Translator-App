@@ -11,19 +11,18 @@ URL = "https://brcwrgmifldflevgukdt.supabase.co"
 KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJyY3dyZ21pZmxkZmxldmd1a2R0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjgzMTAxNDEsImV4cCI6MjA4Mzg4NjE0MX0.vX8RTdbUItPFENvxbN2S5m2axU8EgMspsAd5Pl6498w"
 supabase = create_client(URL, KEY)
 
-# --- 2. CLEAN UI ---
+# --- 2. CLEAN UI (NO ICONS) ---
 st.set_page_config(page_title="Voice Bridge", layout="wide")
 st.markdown("""
     <style>
     header, footer, .stAppDeployButton, #GithubIcon, [data-testid="stHeader"] { visibility: hidden !important; display: none !important; }
-    .partner-msg { background-color: #f1f8e9; padding: 20px; border-radius: 15px; border-left: 10px solid #4caf50; margin: 10px 0; border-bottom: 2px solid #ddd; }
+    .partner-msg { background-color: #f1f8e9; padding: 25px; border-radius: 15px; border-left: 10px solid #4caf50; margin: 15px 0; box-shadow: 0px 4px 6px rgba(0,0,0,0.05); }
     .stButton>button { width: 100%; border-radius: 10px; font-weight: bold; }
     </style>
 """, unsafe_allow_html=True)
 
 @st.cache_resource
 def load_whisper():
-    # Switching to 'base' for much higher accuracy than 'tiny'
     return whisper.load_model("base", device="cpu")
 
 model = load_whisper()
@@ -82,47 +81,60 @@ else:
     my_lang = st.selectbox("My Language:", ["Tamil", "English", "Kannada", "Hindi"], key="user_lang")
     lmap = {"Tamil":"ta", "English":"en", "Kannada":"kn", "Hindi":"hi"}
 
+    # Register my language so the partner's app knows what to translate TO
     supabase.table("call_messages").upsert({"room_id": room_id, "sender_role": f"{role}_settings", "message_text": my_lang}).execute()
 
-    @st.fragment(run_every=3)
+    @st.fragment(run_every=2) # Faster check for a more "live" feel
     def auto_inbox():
         other_role = "receiver" if role == "sender" else "sender"
         try:
+            # Fetch ONLY the single most recent message from the partner
             res = supabase.table("call_messages").select("*").eq("room_id", room_id).eq("sender_role", other_role).order("created_at", desc=True).limit(1).execute()
+            
+            # Fetch partner's current language choice
             p_settings = supabase.table("call_messages").select("message_text").eq("room_id", room_id).eq("sender_role", f"{other_role}_settings").limit(1).execute()
             p_lang = p_settings.data[0]['message_text'] if p_settings.data else "English"
 
             if res.data:
                 msg_data = res.data[0]
                 mid, mtext = msg_data['id'], msg_data['message_text']
+                
+                # Show the most recent message only
                 st.markdown(f'<div class="partner-msg"><b>Partner ({p_lang}):</b><br><h3>{mtext}</h3></div>', unsafe_allow_html=True)
-                if "last_id" not in st.session_state or st.session_state.last_id != mid:
+                
+                # Automatic Audio: Trigger only if this ID hasn't been played yet
+                if "last_played_id" not in st.session_state or st.session_state.last_played_id != mid:
                     play_audio_auto(mtext, lmap[my_lang])
-                    st.session_state.last_id = mid
+                    st.session_state.last_played_id = mid
             else:
-                st.info("⌛ Listening for partner...")
+                st.info("⌛ Waiting for partner's response...")
             return p_lang
-        except: return "English"
+        except Exception as e:
+            return "English"
 
     target_lang = auto_inbox()
     st.divider()
 
-    st.write(f"🎤 Record response in **{my_lang}**")
-    aud = mic_recorder(start_prompt="START SPEAKING", stop_prompt="SEND", key="call_mic")
+    st.write(f"🎤 Speak in **{my_lang}**:")
+    aud = mic_recorder(start_prompt="START RECORDING", stop_prompt="STOP & SEND", key="call_mic")
 
     if aud:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
             tmp.write(aud['bytes'])
             tmp_path = tmp.name
         try:
-            with st.spinner("🚀 Processing..."):
-                # Accuracy Fix: fp16=False solves the math error in your traceback.
-                # accuracy is improved because we are using the 'base' model.
+            with st.spinner("🚀 Translating..."):
+                # Accuracy Fix (Base Model + CPU Float32)
                 res = model.transcribe(tmp_path, fp16=False)
                 text = res['text'].strip()
                 if text:
+                    # Translate to the target language currently set by the partner
                     trans = GoogleTranslator(source=lmap[my_lang], target=lmap[target_lang]).translate(text)
+                    # Send to DB
                     supabase.table("call_messages").insert({"room_id": room_id, "sender_role": role, "message_text": trans}).execute()
+                    st.success("Sent!")
+                    # Brief pause so the user sees the "Sent" status before refresh
+                    time.sleep(0.5)
                     st.rerun()
         finally:
             if os.path.exists(tmp_path): os.remove(tmp_path)
@@ -130,6 +142,7 @@ else:
     if st.button("❌ End Session"):
         st.query_params.clear()
         st.rerun()
+
 
 
 
