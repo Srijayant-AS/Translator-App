@@ -15,14 +15,14 @@ st.markdown("""
     header {visibility: hidden;}
     .stAppDeployButton {display:none;}
     [data-testid="stHeader"] {display:none;}
+    div[data-testid="stToolbar"] {visibility: hidden;}
     
-    /* Custom Styling for the Copy Section */
     .copy-box {
         background-color: #f0f2f6;
         padding: 15px;
         border-radius: 10px;
         border: 2px solid #007bff;
-        margin-bottom: 10px;
+        margin-top: 10px;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -51,47 +51,51 @@ if not room_id:
     my_l = st.selectbox("I will speak in:", ["Tamil", "English", "Kannada", "Hindi"])
     phone = st.text_input("Receiver's WhatsApp (e.g., 919876543210)")
 
-    if 'generated_url' not in st.session_state:
-        st.session_state.generated_url = ""
+    if 'temp_room_id' not in st.session_state:
+        st.session_state.temp_room_id = ""
 
     if st.button("Step 1: Create Secure Room"):
-        new_room = str(uuid.uuid4())[:8]
-        # We only generate the suffix; the user pastes this after their main URL
-        st.session_state.generated_url = f"?room={new_room}&slang={my_l}"
-        st.session_state.room_id = new_room
+        st.session_state.temp_room_id = str(uuid.uuid4())[:8]
         st.session_state.my_l = my_l
 
-    if st.session_state.generated_url:
+    if st.session_state.temp_room_id:
         st.write("---")
-        st.success("✅ Room Prepared!")
+        st.success("✅ Room Ready!")
         
-        # --- HIGH VISIBILITY COPY BUTTON ---
-        url_to_copy = st.session_state.generated_url
+        # --- FULL LINK AUTO-DETECTION & COPY ---
+        # This script grabs the FULL URL from the browser bar automatically
+        suffix = f"?room={st.session_state.temp_room_id}&slang={st.session_state.my_l}"
         
-        # HTML/JS for a big, clear copy button
         copy_html = f"""
             <div class="copy-box">
-                <p style="color:black; font-weight:bold;">Unique Room Suffix:</p>
-                <input type="text" value="{url_to_copy}" id="urlInput" style="width:100%; padding:10px; margin-bottom:10px;">
-                <button onclick="copyFunction()" style="width:100%; background-color:#007bff; color:white; padding:10px; border:none; border-radius:5px; font-weight:bold; cursor:pointer;">
-                    📋 CLICK HERE TO COPY LINK
+                <p style="color:black; font-weight:bold;">Complete Call Link:</p>
+                <input type="text" id="fullUrl" style="width:100%; padding:10px; margin-bottom:10px;" readonly>
+                <button onclick="copyFullUrl()" style="width:100%; background-color:#007bff; color:white; padding:12px; border:none; border-radius:5px; font-weight:bold; cursor:pointer;">
+                    📋 CLICK TO COPY FULL LINK
                 </button>
             </div>
 
             <script>
-            function copyFunction() {{
-                var copyText = document.getElementById("urlInput");
-                copyText.select();
-                copyText.setSelectionRange(0, 99999); /* For mobile devices */
-                navigator.clipboard.writeText(copyText.value).then(() => {{
-                    alert("Copied: " + copyText.value);
-                }});
-            }}
+                // Get the current base URL (e.g., https://app.streamlit.app)
+                var currentBase = window.location.origin + window.location.pathname;
+                var fullLink = currentBase + "{suffix}";
+                
+                // Display it in the box
+                document.getElementById("fullUrl").value = fullLink;
+
+                function copyFullUrl() {{
+                    var copyText = document.getElementById("fullUrl");
+                    copyText.select();
+                    copyText.setSelectionRange(0, 99999); 
+                    navigator.clipboard.writeText(fullLink).then(() => {{
+                        alert("Full Link Copied! Ready to paste in WhatsApp.");
+                    }});
+                }}
             </script>
         """
-        st.components.v1.html(copy_html, height=180)
+        st.components.v1.html(copy_html, height=200)
         
-        wa_msg = urllib.parse.quote(f"Join my private voice bridge. Please click the link I'm about to send.")
+        wa_msg = urllib.parse.quote(f"Join my private voice bridge. Please click the link I'm about to paste.")
         wa_url = f"https://api.whatsapp.com/send?phone={phone}&text={wa_msg}"
         
         st.markdown(f'''
@@ -102,7 +106,7 @@ if not room_id:
             </a>''', unsafe_allow_html=True)
         
         if st.button("Step 3: Enter My Room"):
-            st.query_params.update(room=st.session_state.room_id, slang=st.session_state.my_l, role="sender")
+            st.query_params.update(room=st.session_state.temp_room_id, slang=st.session_state.my_l, role="sender")
             st.rerun()
 
 # CASE B: RECEIVER SETUP
