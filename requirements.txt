@@ -1,9 +1,11 @@
-streamlit
-streamlit-mic-recorder
+librosa
+soundfile
+numpy
 openai-whisper
+streamlit-mic-recorder
 deep-translator
 gTTS
-mutagen
 supabase
+
 
 
