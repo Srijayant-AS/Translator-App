@@ -13,52 +13,59 @@ supabase = create_client(URL, KEY)
 
 # --- 2. CLEAN UI ---
 st.set_page_config(page_title="Voice Bridge", layout="wide")
-st.markdown("""
-    <style>
-    header, footer, .stAppDeployButton, #GithubIcon, [data-testid="stHeader"] { visibility: hidden !important; display: none !important; }
-    .partner-msg { background-color: #f1f8e9; padding: 20px; border-radius: 12px; border-left: 8px solid #4caf50; }
-    </style>
-""", unsafe_allow_html=True)
+st.markdown("<style>header, footer, .stAppDeployButton, #GithubIcon { visibility: hidden !important; }</style>", unsafe_allow_html=True)
 
 @st.cache_resource
 def load_whisper():
-    # 'tiny' is 5x faster than 'base'
     return whisper.load_model("tiny", device="cpu")
 
 model = load_whisper()
 
+# Ensure we have a persistent list of what we've already played
+if "played_ids" not in st.session_state:
+    st.session_state.played_ids = set()
+
 def play_audio_and_cleanup(msg_id, text, lang_code):
-    if "played_ids" not in st.session_state: st.session_state.played_ids = set()
-    if msg_id in st.session_state.played_ids: return
+    """Guarantees a message plays ONLY ONCE"""
+    if msg_id in st.session_state.played_ids:
+        return
+
     f_path = f"v_{uuid.uuid4().hex}.mp3"
     try:
         gTTS(text=text, lang=lang_code).save(f_path)
         with open(f_path, "rb") as f:
             b64 = base64.b64encode(f.read()).decode()
+        
+        # Audio Injection
         st.markdown(f'<audio autoplay="true"><source src="data:audio/mp3;base64,{b64}" type="audio/mp3"></audio>', unsafe_allow_html=True)
+        
+        # Immediate Local Lock
         st.session_state.played_ids.add(msg_id)
+        
+        # Cleanup DB
         supabase.table("call_messages").delete().eq("id", msg_id).execute()
-        time.sleep(0.5)
+        time.sleep(1)
         os.remove(f_path)
     except: pass
 
-# --- 3. NAVIGATION (WhatsApp & Join Buttons) ---
+# --- 3. NAVIGATION (RETAINING ALL STEPS) ---
 params = st.query_params
 room_id = params.get("room")
 role = params.get("role", "sender")
 is_active = params.get("active") == "true"
 
 if not room_id:
-    st.title("📞 Fast Voice Bridge")
+    st.title("📞 Fast Translation Room")
     my_lang = st.selectbox("I speak in:", ["Tamil", "English", "Kannada", "Hindi"])
     if st.button("🔗 GENERATE LINK"):
         rid = str(uuid.uuid4())[:8]
         host = st.context.headers.get("host")
         link = f"https://{host}/?room={rid}&role=receiver"
         st.session_state.invite_link, st.session_state.temp_rid = link, rid
+    
     if "invite_link" in st.session_state:
         st.info(f"Link: {st.session_state.invite_link}")
-        wa_url = f"https://api.whatsapp.com/send?text={urllib.parse.quote('Join call: ' + st.session_state.invite_link)}"
+        wa_url = f"https://api.whatsapp.com/send?text={urllib.parse.quote('Join: ' + st.session_state.invite_link)}"
         st.markdown(f'<a href="{wa_url}" target="_blank"><div style="background-color:#25D366;color:white;padding:12px;border-radius:10px;text-align:center;font-weight:bold;">📲 WhatsApp Invite</div></a>', unsafe_allow_html=True)
         if st.button("✅ JOIN ROOM NOW"):
             st.query_params.update(room=st.session_state.temp_rid, role="sender", ml=my_lang, active="true")
@@ -72,53 +79,59 @@ elif room_id and not is_active:
         st.rerun()
 
 else:
-    # --- ACTIVE CHAT ---
+    # --- ACTIVE ROOM ---
     lmap = {"Tamil":"ta", "English":"en", "Kannada":"kn", "Hindi":"hi"}
     my_lang = st.selectbox("My Language:", list(lmap.keys()), key="user_lang")
-    # Quick Handshake
     supabase.table("call_messages").upsert({"room_id": room_id, "sender_role": f"{role}_settings", "message_text": my_lang}).execute()
 
-    @st.fragment(run_every=1) # Refresh every 1 second for speed
+    @st.fragment(run_every=2)
     def inbox():
         other_role = "receiver" if role == "sender" else "sender"
         try:
             res = supabase.table("call_messages").select("*").eq("room_id", room_id).eq("sender_role", other_role).order("created_at", desc=True).limit(1).execute()
             if res.data:
                 msg = res.data[0]
-                if msg["id"] not in st.session_state.get('played_ids', set()):
-                    st.markdown(f'<div class="partner-msg"><h3>{msg["message_text"]}</h3></div>', unsafe_allow_html=True)
-                    play_audio_and_cleanup(msg["id"], msg["message_text"], lmap[my_lang])
+                mid = msg["id"]
+                # Only show and play if NOT in our "already played" list
+                if mid not in st.session_state.played_ids:
+                    st.markdown(f'<div style="background:#f1f8e9;padding:15px;border-radius:10px;"><h3>{msg["message_text"]}</h3></div>', unsafe_allow_html=True)
+                    play_audio_and_cleanup(mid, msg["message_text"], lmap[my_lang])
         except: pass
 
     inbox()
     st.divider()
 
-    # --- FAST RECORDING ---
     aud = mic_recorder(start_prompt="🎤 START", stop_prompt="⏹️ SEND", key="mic")
     if aud:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
             tmp.write(aud['bytes']); tmp_path = tmp.name
         try:
-            with st.spinner("⚡ Processing..."):
+            with st.spinner("⚡ Translating..."):
                 source_code = lmap[my_lang]
-                # Whisper Tiny + Greedy decoding = Instant
-                result = model.transcribe(tmp_path, language=source_code, fp16=False)
-                raw_text = result['text'].strip()
-                if raw_text:
-                    # Fetch partner lang directly from DB query to save time
+                
+                # THE FIX: We use task="translate" to force Whisper to convert Tamil to English meanings
+                result = model.transcribe(tmp_path, language=source_code, task="translate", fp16=False)
+                english_meaning = result['text'].strip()
+                
+                if english_meaning:
+                    # Determine partner language
                     p_settings = supabase.table("call_messages").select("message_text").eq("room_id", room_id).eq("sender_role", f"{'receiver' if role == 'sender' else 'sender'}_settings").limit(1).execute()
-                    target_code = lmap[p_settings.data[0]['message_text']] if p_settings.data else "en"
+                    target_lang_name = p_settings.data[0]['message_text'] if p_settings.data else "English"
                     
-                    # Force Translation Meaning
-                    trans = GoogleTranslator(source='auto', target=target_code).translate(raw_text)
-                    supabase.table("call_messages").insert({"room_id": room_id, "sender_role": role, "message_text": trans}).execute()
+                    # If partner's language is NOT English, we translate the English meaning to their language (e.g. English -> Hindi)
+                    final_text = english_meaning
+                    if target_lang_name != "English":
+                        final_text = GoogleTranslator(source='en', target=lmap[target_lang_name]).translate(english_meaning)
+                    
+                    supabase.table("call_messages").insert({"room_id": room_id, "sender_role": role, "message_text": final_text}).execute()
                     st.rerun()
         finally:
             if os.path.exists(tmp_path): os.remove(tmp_path)
 
-    if st.button("❌ End"):
+    if st.button("❌ End Session"):
         st.query_params.clear()
         st.rerun()
+
 
 
 
