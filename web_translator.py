@@ -6,24 +6,22 @@ from gtts import gTTS
 import os, base64, tempfile, time, urllib.parse, uuid
 from supabase import create_client
 
-# --- 1. SUPABASE CONNECTION WITH RETRY LOGIC ---
+# --- 1. SUPABASE CONFIG ---
 URL = "https://brcwrgmifldflevgukdt.supabase.co"
 KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJyY3dyZ21pZmxkZmxldmd1a2R0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjgzMTAxNDEsImV4cCI6MjA4Mzg4NjE0MX0.vX8RTdbUItPFENvxbN2S5m2axU8EgMspsAd5Pl6498w"
 
 @st.cache_resource
-def get_supabase():
+def init_db():
     return create_client(URL, KEY)
 
-def safe_db_query(query_func, retries=3):
-    """Retries the database connection if httpx.ConnectError occurs"""
-    for i in range(retries):
-        try:
-            return query_func().execute()
-        except Exception:
-            if i == retries - 1: return None
-            time.sleep(0.5)
+db = init_db()
 
-supabase = get_supabase()
+def safe_db_call(func):
+    """Execution wrapper that suppresses ConnectErrors to prevent app crashes"""
+    try:
+        return func().execute()
+    except Exception:
+        return None
 
 # --- 2. MODELS & UI ---
 st.set_page_config(page_title="Voice Bridge", layout="wide")
@@ -48,20 +46,20 @@ def play_voice(msg_id, text, lang_code):
         with open(f_path, "rb") as f:
             b64 = base64.b64encode(f.read()).decode()
         st.markdown(f'<audio autoplay="true"><source src="data:audio/mp3;base64,{b64}" type="audio/mp3"></audio>', unsafe_allow_html=True)
-        # Attempt silent delete
-        safe_db_query(lambda: supabase.table("call_messages").delete().eq("id", msg_id))
+        # Background cleanup
+        safe_db_call(lambda: db.table("call_messages").delete().eq("id", msg_id))
         time.sleep(1)
         os.remove(f_path)
     except: pass
 
-# --- 3. NAVIGATION (WhatsApp Retained) ---
+# --- 3. NAVIGATION (WhatsApp Flow) ---
 params = st.query_params
 room_id = params.get("room")
 role = params.get("role", "sender")
 is_active = params.get("active") == "true"
 
 if not room_id:
-    st.title("📞 Stable Meaning-Translator")
+    st.title("📞 Stable Meaning-Bridge")
     my_lang = st.selectbox("I speak in:", ["Tamil", "English", "Kannada", "Hindi"])
     if st.button("🔗 CREATE UNIQUE LINK"):
         rid = str(uuid.uuid4())[:8]
@@ -87,20 +85,22 @@ else:
     lmap = {"Tamil":"ta", "English":"en", "Kannada":"kn", "Hindi":"hi"}
     my_lang = st.selectbox("My Language:", list(lmap.keys()), key="user_lang")
     
-    # Save settings with retry
-    safe_db_query(lambda: supabase.table("call_messages").upsert({"room_id": room_id, "sender_role": f"{role}_settings", "message_text": my_lang}))
+    # Silent Setting Push
+    if "lang_pushed" not in st.session_state:
+        safe_db_call(lambda: db.table("call_messages").upsert({"room_id": room_id, "sender_role": f"{role}_settings", "message_text": my_lang}))
+        st.session_state.lang_pushed = True
 
-    @st.fragment(run_every=4) # Slower refresh to keep connection stable
-    def inbox():
+    @st.fragment(run_every=4) 
+    def inbox_manager():
         other_role = "receiver" if role == "sender" else "sender"
-        res = safe_db_query(lambda: supabase.table("call_messages").select("*").eq("room_id", room_id).eq("sender_role", other_role).order("created_at", desc=True).limit(1))
+        res = safe_db_call(lambda: db.table("call_messages").select("*").eq("room_id", room_id).eq("sender_role", other_role).order("created_at", desc=True).limit(1))
         if res and res.data:
             msg = res.data[0]
             if msg["id"] not in st.session_state.played_ids:
                 st.success(f"Partner: {msg['message_text']}")
                 play_voice(msg["id"], msg["message_text"], lmap[my_lang])
 
-    inbox()
+    inbox_manager()
     st.divider()
 
     aud = mic_recorder(start_prompt="🎤 START SPEAKING", stop_prompt="⏹️ SEND", key="mic")
@@ -108,26 +108,27 @@ else:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
             tmp.write(aud['bytes']); tmp_path = tmp.name
         try:
-            with st.spinner("🚀 Translating Meaning..."):
-                # Meaning Fix: Direct Whisper Translation to English
+            with st.spinner("🚀 Meaning-Translation..."):
+                # Force meaning (Tamil -> English)
                 result = model.transcribe(tmp_path, language=lmap[my_lang], task="translate", fp16=False)
-                eng_text = result['text'].strip()
+                txt = result['text'].strip()
                 
-                if eng_text:
-                    # Get partner lang only when sending to save pings
+                if txt:
+                    # Logic to get partner's language
                     other_role = "receiver" if role == "sender" else "sender"
-                    p_set = safe_db_query(lambda: supabase.table("call_messages").select("message_text").eq("room_id", room_id).eq("sender_role", f"{other_role}_settings").limit(1))
-                    target_lang = p_set.data[0]['message_text'] if (p_set and p_set.data) else "English"
+                    p_res = safe_db_call(lambda: db.table("call_messages").select("message_text").eq("room_id", room_id).eq("sender_role", f"{other_role}_settings").limit(1))
+                    target = p_res.data[0]['message_text'] if (p_res and p_res.data) else "English"
                     
-                    # Force conversion to English meaning
-                    final_msg = GoogleTranslator(source='en', target=lmap[target_lang]).translate(eng_text)
+                    # Ensure meaning-over-slang
+                    final = GoogleTranslator(source='auto', target=lmap[target]).translate(txt)
                     
-                    # Save and Clear History local memory
-                    safe_db_query(lambda: supabase.table("call_messages").insert({"room_id": room_id, "sender_role": role, "message_text": final_msg}))
+                    # Push to DB and clear local history
+                    safe_db_call(lambda: db.table("call_messages").insert({"room_id": room_id, "sender_role": role, "message_text": final}))
                     st.session_state.played_ids.clear()
                     st.rerun()
         finally:
             if os.path.exists(tmp_path): os.remove(tmp_path)
+
 
 
 
