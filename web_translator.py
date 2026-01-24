@@ -9,72 +9,66 @@ from supabase import create_client
 # --- 1. SUPABASE CONFIG ---
 URL = "https://brcwrgmifldflevgukdt.supabase.co"
 KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJyY3dyZ21pZmxkZmxldmd1a2R0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjgzMTAxNDEsImV4cCI6MjA4Mzg4NjE0MX0.vX8RTdbUItPFENvxbN2S5m2axU8EgMspsAd5Pl6498w"
+supabase = create_client(URL, KEY)
 
-@st.cache_resource
-def init_db():
-    return create_client(URL, KEY)
-
-db = init_db()
-
-def safe_db_call(func):
-    """Execution wrapper that suppresses ConnectErrors to prevent app crashes"""
-    try:
-        return func().execute()
-    except Exception:
-        return None
-
-# --- 2. MODELS & UI ---
+# --- 2. CLEAN UI ---
 st.set_page_config(page_title="Voice Bridge", layout="wide")
 st.markdown("<style>header, footer, .stAppDeployButton, #GithubIcon, [data-testid='stHeader'] { visibility: hidden !important; }</style>", unsafe_allow_html=True)
 
 @st.cache_resource
 def load_whisper():
-    return whisper.load_model("tiny", device="cpu")
+    return whisper.load_model("base", device="cpu")
 
 model = load_whisper()
 
+# Persistence for "Already Played" messages
 if "played_ids" not in st.session_state:
     st.session_state.played_ids = set()
 
 def play_voice(msg_id, text, lang_code):
-    if msg_id in st.session_state.played_ids: return
-    st.session_state.played_ids.add(msg_id)
+    """Plays audio once and kills the message immediately"""
+    if msg_id in st.session_state.played_ids:
+        return
     
+    st.session_state.played_ids.add(msg_id) # Block further loops instantly
     f_path = f"v_{uuid.uuid4().hex}.mp3"
     try:
         gTTS(text=text, lang=lang_code).save(f_path)
         with open(f_path, "rb") as f:
             b64 = base64.b64encode(f.read()).decode()
         st.markdown(f'<audio autoplay="true"><source src="data:audio/mp3;base64,{b64}" type="audio/mp3"></audio>', unsafe_allow_html=True)
-        # Background cleanup
-        safe_db_call(lambda: db.table("call_messages").delete().eq("id", msg_id))
+        
+        # Immediate Database cleanup
+        supabase.table("call_messages").delete().eq("id", msg_id).execute()
         time.sleep(1)
         os.remove(f_path)
-    except: pass
+    except:
+        pass
 
-# --- 3. NAVIGATION (WhatsApp Flow) ---
+# --- 3. NAVIGATION (Retained Flow) ---
 params = st.query_params
 room_id = params.get("room")
 role = params.get("role", "sender")
 is_active = params.get("active") == "true"
 
 if not room_id:
-    st.title("📞 Stable Meaning-Bridge")
+    st.title("📞 Fast Meaning-Bridge")
     my_lang = st.selectbox("I speak in:", ["Tamil", "English", "Kannada", "Hindi"])
     if st.button("🔗 CREATE UNIQUE LINK"):
         rid = str(uuid.uuid4())[:8]
         host = st.context.headers.get("host")
         link = f"https://{host}/?room={rid}&role=receiver"
         st.session_state.invite_link, st.session_state.temp_rid = link, rid
+    
     if "invite_link" in st.session_state:
         wa_url = f"https://api.whatsapp.com/send?text={urllib.parse.quote('Join call: ' + st.session_state.invite_link)}"
         st.markdown(f'<a href="{wa_url}" target="_blank"><div style="background-color:#25D366;color:white;padding:15px;border-radius:10px;text-align:center;font-weight:bold;">📲 WhatsApp Invite</div></a>', unsafe_allow_html=True)
-        if st.button("✅ JOIN NOW"):
+        if st.button("✅ JOIN ROOM NOW"):
             st.query_params.update(room=st.session_state.temp_rid, role="sender", ml=my_lang, active="true")
             st.rerun()
 
 elif room_id and not is_active:
-    st.title("📩 Invitation Received")
+    st.title("📩 Invited to Call")
     my_lang = st.selectbox("I speak in:", ["English", "Tamil", "Kannada", "Hindi"])
     if st.button("🚀 JOIN NOW"):
         st.query_params.update(room=room_id, role="receiver", ml=my_lang, active="true")
@@ -84,21 +78,20 @@ else:
     # --- ACTIVE CALL ---
     lmap = {"Tamil":"ta", "English":"en", "Kannada":"kn", "Hindi":"hi"}
     my_lang = st.selectbox("My Language:", list(lmap.keys()), key="user_lang")
-    
-    # Silent Setting Push
-    if "lang_pushed" not in st.session_state:
-        safe_db_call(lambda: db.table("call_messages").upsert({"room_id": room_id, "sender_role": f"{role}_settings", "message_text": my_lang}))
-        st.session_state.lang_pushed = True
+    supabase.table("call_messages").upsert({"room_id": room_id, "sender_role": f"{role}_settings", "message_text": my_lang}).execute()
 
-    @st.fragment(run_every=4) 
+    @st.fragment(run_every=2)
     def inbox_manager():
         other_role = "receiver" if role == "sender" else "sender"
-        res = safe_db_call(lambda: db.table("call_messages").select("*").eq("room_id", room_id).eq("sender_role", other_role).order("created_at", desc=True).limit(1))
-        if res and res.data:
-            msg = res.data[0]
-            if msg["id"] not in st.session_state.played_ids:
-                st.success(f"Partner: {msg['message_text']}")
-                play_voice(msg["id"], msg["message_text"], lmap[my_lang])
+        try:
+            # Fetch only the single most recent message
+            res = supabase.table("call_messages").select("*").eq("room_id", room_id).eq("sender_role", other_role).order("created_at", desc=True).limit(1).execute()
+            if res.data:
+                msg = res.data[0]
+                if msg["id"] not in st.session_state.played_ids:
+                    st.markdown(f'<div style="background:#f1f8e9;padding:20px;border-radius:15px;border-left:8px solid #4caf50;"><h3>{msg["message_text"]}</h3></div>', unsafe_allow_html=True)
+                    play_voice(msg["id"], msg["message_text"], lmap[my_lang])
+        except: pass
 
     inbox_manager()
     st.divider()
@@ -108,26 +101,28 @@ else:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
             tmp.write(aud['bytes']); tmp_path = tmp.name
         try:
-            with st.spinner("🚀 Meaning-Translation..."):
-                # Force meaning (Tamil -> English)
+            with st.spinner("🚀 Translating Meaning..."):
+                # Meaning Fix: Use 'translate' task directly in Whisper
+                # This changes Tamil audio -> English text directly
                 result = model.transcribe(tmp_path, language=lmap[my_lang], task="translate", fp16=False)
-                txt = result['text'].strip()
+                english_meaning = result['text'].strip()
                 
-                if txt:
-                    # Logic to get partner's language
+                if english_meaning:
+                    # Check partner language
                     other_role = "receiver" if role == "sender" else "sender"
-                    p_res = safe_db_call(lambda: db.table("call_messages").select("message_text").eq("room_id", room_id).eq("sender_role", f"{other_role}_settings").limit(1))
-                    target = p_res.data[0]['message_text'] if (p_res and p_res.data) else "English"
+                    p_set = supabase.table("call_messages").select("message_text").eq("room_id", room_id).eq("sender_role", f"{other_role}_settings").limit(1).execute()
+                    target_lang_name = p_set.data[0]['message_text'] if p_set.data else "English"
                     
-                    # Ensure meaning-over-slang
-                    final = GoogleTranslator(source='auto', target=lmap[target]).translate(txt)
+                    # Final Step: If partner isn't English, convert that English meaning to their lang
+                    final_msg = english_meaning
+                    if target_lang_name != "English":
+                        final_msg = GoogleTranslator(source='en', target=lmap[target_lang_name]).translate(english_meaning)
                     
-                    # Push to DB and clear local history
-                    safe_db_call(lambda: db.table("call_messages").insert({"room_id": room_id, "sender_role": role, "message_text": final}))
-                    st.session_state.played_ids.clear()
+                    supabase.table("call_messages").insert({"room_id": room_id, "sender_role": role, "message_text": final_msg}).execute()
                     st.rerun()
         finally:
             if os.path.exists(tmp_path): os.remove(tmp_path)
+
 
 
 
